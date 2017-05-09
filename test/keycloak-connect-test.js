@@ -144,6 +144,19 @@ test('Should verify custom logout.', t => {
     });
 });
 
+test('Should verify logout with a redirect url.', t => {
+    request(app)
+        .get('/logout?redirectUrl=http://localhost:8080/custom-redirect')
+        .end((err, res) => {
+            if (err) {
+                console.log(err);
+            }
+            t.equal(res.text.indexOf('Redirecting to http://localhost:8080/auth/realms/test-realm/protocol/openid-connect/logout?redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcustom-redirect') > 0, true);
+            t.equal(res.statusCode, 302);
+            t.end();
+        });
+});
+
 test('Should produce correct account url.', t => {
   t.equal(kc.accountUrl(), 'http://localhost:8080/auth/realms/test-realm/account');
   t.end();
