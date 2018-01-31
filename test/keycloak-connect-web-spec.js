@@ -71,25 +71,21 @@ test('Should login with admin credentials', t => {
 });
 
 test('Should redirect to custom logout url', t => {
-
   const targetUrl = `http://localhost:${app.port}/custom-logout`;
 
   t.plan(1);
 
-  return client.then((installation) => {
-    app.build(installation);
-    page.get(app.port, '/restricted');
-    page.login('alice', 'password');
+  page.get(app.port, '/restricted');
+  page.login('alice', 'password');
 
-    page.get(app.port, `/logout?redirectUrl=${targetUrl}`);
+  page.get(app.port, `/logout?redirectUrl=${targetUrl}`);
 
-    return page.events().getText().then(function (text) {
-      t.equal(text, 'Custom Logout Redirect Success', 'User should be redirected to custom logout page');
-    }).then(() => {
-      page.get(app.port, '/logout');
-    })
+  return page.events().getText().then(function (text) {
+    t.equal(text, 'Custom Logout Redirect Success', 'User should be redirected to custom logout page');
+  }).then(() => {
+    page.get(app.port, '/logout');
   });
-})
+});
 
 test('User should be forbidden to access restricted page', t => {
   t.plan(1);
