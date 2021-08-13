@@ -117,6 +117,10 @@ function NodeApp () {
       output(res, user, 'Restricted access');
     });
 
+    app.get('/custom-logout', function (req, res) {
+      output(res, 'Logged Out', 'Custom Logout Redirect Success');
+    });
+
     app.get('/service/public', function (req, res) {
       res.json({message: 'public'});
     });

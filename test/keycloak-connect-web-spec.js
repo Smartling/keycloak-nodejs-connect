@@ -80,6 +80,36 @@ test('User should be forbidden to access restricted page', t => {
   });
 });
 
+test('Should redirect to custom logout url', t => {
+  const targetUrl = `http://localhost:${app.port}/custom-logout`;
+
+  t.plan(1);
+
+  page.get(app.port, '/restricted');
+  page.login('alice', 'password');
+
+  page.get(app.port, `/logout?redirectUrl=${targetUrl}`);
+
+  return page.events().getText().then(function (text) {
+    t.equal(text, 'Custom Logout Redirect Success', 'User should be redirected to custom logout page');
+  }).then(() => {
+    page.get(app.port, '/logout');
+  });
+});
+
+test('User should be forbidden to access restricted page', t => {
+  t.plan(1);
+
+  page.get(app.port, '/restricted');
+  page.login('alice', 'password');
+
+  return page.body().getText().then(text => {
+    t.equal(text, 'Access denied', 'Message should be access denied');
+  }).then(() => {
+    page.get(app.port, '/logout');
+  });
+});
+
 test('Public client should be forbidden for invalid public key', t => {
   t.plan(2);
   var app = new NodeApp();

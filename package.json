@@ -1,6 +1,6 @@
 {
-  "name": "keycloak-connect",
-  "version": "4.1.0-final",
+  "name": "@smartling/keycloak-connect",
+  "version": "4.1.40-rc1",
   "description": "Keycloak Connect Middleware",
   "homepage": "http://keycloak.org",
   "main": "index.js",
@@ -69,5 +69,8 @@
     "type": "git",
     "url": "https://github.com/keycloak/keycloak-nodejs-connect.git"
   },
-  "bugs": "https://github.com/keycloak/keycloak-nodejs-connect/issues"
+  "bugs": "https://github.com/keycloak/keycloak-nodejs-connect/issues",
+  "publishConfig": {
+    "registry": "https://artifactory.smartling.net/artifactory/api/npm/local-tms-frontend"
+  }
 }

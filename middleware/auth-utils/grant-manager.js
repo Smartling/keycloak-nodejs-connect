@@ -40,6 +40,7 @@ function GrantManager (config) {
   this.bearerOnly = config.bearerOnly;
   this.notBefore = 0;
   this.rotation = new Rotation(config);
+  this.tokenMinTtl = config.tokenMinTtl;
 }
 
 /**
@@ -141,7 +142,7 @@ GrantManager.prototype.obtainFromClientCredentials = function obtainFromlientCre
  * @param {Function} callback Optional callback if promises are not used.
  */
 GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callback) {
-  if (!grant.isExpired()) {
+  if (!grant.isExpired() && !grant.willTokenExpireBeforeTimeToLive(this.tokenMinTtl)) {
     return nodeify(Promise.resolve(grant), callback);
   }
 
