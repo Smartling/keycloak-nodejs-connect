@@ -205,7 +205,7 @@ GrantManager.prototype.userInfo = function userInfo (token, callback) {
   const promise = new Promise((resolve, reject) => {
     const req = getProtocol(options).request(options, (response) => {
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        return reject('Error fetching account');
+        return reject(new Error('Error fetching account'));
       }
       let json = '';
       response.on('data', (d) => (json += d.toString()));
