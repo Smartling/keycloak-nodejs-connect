@@ -1,6 +1,6 @@
 {
   "name": "@smartling/keycloak-connect",
-  "version": "4.1.40-rc1",
+  "version": "4.1.40-rc2",
   "description": "Keycloak Connect Middleware",
   "homepage": "http://keycloak.org",
   "main": "index.js",

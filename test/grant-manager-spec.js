@@ -29,28 +29,32 @@ test('GrantManager in public mode should be able to obtain a grant', (t) => {
   const manager = getManager('./test/fixtures/auth-utils/keycloak-public.json');
   manager.obtainDirectly('test-user', 'tiger')
     .then((grant) => t.notEqual(grant.access_token, undefined))
-    .then(t.end);
+    .then(t.end)
+    .catch(console.error);
 });
 
 test('GrantManager in public mode should be able to obtain a raw grant', (t) => {
   const manager = getManager('./test/fixtures/auth-utils/keycloak-public.json');
   manager.obtainDirectly('test-user', 'tiger')
     .then((grant) => t.notEqual(grant.toString(), undefined))
-    .then(t.end);
+    .then(t.end)
+    .catch(console.error);
 });
 
 test('GrantManager in public mode with public key configured should be able to obtain a grant', (t) => {
   const manager = getManager('./test/fixtures/auth-utils/keycloak-with-public-key.json');
   manager.obtainDirectly('test-user', 'tiger')
     .then((grant) => t.notEqual(grant.access_token, undefined))
-    .then(t.end);
+    .then(t.end)
+    .catch(console.error);
 });
 
 test('GrantManager in public mode should be able to refresh a grant', (t) => {
   const manager = getManager('./test/fixtures/auth-utils/keycloak-with-public-key.json');
   manager.obtainDirectly('test-user', 'tiger')
     .then((grant) => t.true(manager.isGrantRefreshable(grant)))
-    .then(t.end);
+    .then(t.end)
+    .catch(console.error);
 });
 
 test('GrantManager should return empty with public key configured but invalid signature', (t) => {
@@ -71,7 +75,8 @@ test('GrantManager in public mode should be able to get userinfo', (t) => {
   manager.obtainDirectly('test-user', 'tiger')
     .then((grant) => manager.userInfo(grant.access_token))
     .then((user) => t.equal(user.preferred_username, 'test-user'))
-    .then(t.end);
+    .then(t.end)
+    .catch(console.error);
 });
 
 const manager = getManager('./test/fixtures/auth-utils/keycloak-confidential.json');

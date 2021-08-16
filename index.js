@@ -263,7 +263,7 @@ Keycloak.prototype.getGrant = function (request, response) {
     });
   }
 
-  return Promise.reject(new Error('Could not obtain grant code error'));
+  return Promise.reject();
 };
 
 Keycloak.prototype.storeGrant = function (grant, request, response) {
