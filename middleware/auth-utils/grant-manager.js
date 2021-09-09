@@ -420,16 +420,16 @@ const fetch = (manager, handler, options, params) => {
     options.headers['Content-Length'] = data.length;
 
     const req = getProtocol(options).request(options, (response) => {
+      let json = '';
+      response.on('data', (d) => (json += d.toString()));
       if (response.statusCode < 200 || response.statusCode > 299) {
-        let response = '';
-        response.on('data', (d) => (response += d.toString()));
         response.on('end', () => {
-          const message = response.statusCode + ':' + http.STATUS_CODES[ response.statusCode ] + ' ' + response;
-          reject(new Error(message));
+          const grantType = typeof params === 'object' ? (params.grant_type || '') : '';
+          const req = `${options.method}:${options.path} ${grantType}`;
+          const resp = `${response.statusCode}: ${http.STATUS_CODES[response.statusCode]} ${json}`;
+          reject(new Error(resp + ' on ' + req));
         });
       } else {
-        let json = '';
-        response.on('data', (d) => (json += d.toString()));
         response.on('end', () => {
           handler(resolve, reject, json);
         });

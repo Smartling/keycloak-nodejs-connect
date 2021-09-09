@@ -23,10 +23,10 @@ module.exports = function (keycloak) {
       })
         .then(next).catch(err => {
         // err can be undefined
-        if (err) {
+          if (err) {
             console.error('Failed to get grant', err);
-        }
-        next();
-    });
+          }
+          next();
+        });
   };
 };

@@ -39,7 +39,7 @@ function Token (token, clientId) {
       this.signature = new Buffer(parts[2], 'base64');
       this.signed = parts[0] + '.' + parts[1];
     } catch (err) {
-      console.error('Failed to parse JWT token', err);
+      console.error('Failed to parse JWT token: ' + err);
       this.content = {
         exp: 0
       };
