@@ -205,7 +205,7 @@ GrantManager.prototype.userInfo = function userInfo (token, callback) {
   const promise = new Promise((resolve, reject) => {
     const req = getProtocol(options).request(options, (response) => {
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        return reject('Error fetching account');
+        return reject(new Error('Error fetching account'));
       }
       let json = '';
       response.on('data', (d) => (json += d.toString()));
@@ -363,8 +363,8 @@ GrantManager.prototype.validateToken = function validateToken (token) {
           } else {
             resolve(token);
           }
-        }, () => {
-          reject(new Error('failed to load public key to verify token'));
+        }).catch((err) => {
+          reject(new Error('failed to load public key to verify token. Reason: ' + err));
         });
       }
     }
@@ -420,13 +420,17 @@ const fetch = (manager, handler, options, params) => {
     options.headers['Content-Length'] = data.length;
 
     const req = getProtocol(options).request(options, (response) => {
-      if (response.statusCode < 200 || response.statusCode > 299) {
-        return reject(response.statusCode + ':' + http.STATUS_CODES[ response.statusCode ]);
-      }
       let json = '';
       response.on('data', (d) => (json += d.toString()));
       response.on('end', () => {
-        handler(resolve, reject, json);
+        if (response.statusCode < 200 || response.statusCode > 299) {
+          const grantType = typeof params === 'object' ? (params.grant_type || '') : '';
+          const req = `${options.method}:${options.path} ${grantType}`;
+          const resp = `${response.statusCode}: ${http.STATUS_CODES[response.statusCode]} ${json}`;
+          reject(new Error(resp + ' on ' + req));
+        } else {
+          handler(resolve, reject, json);
+        }
       });
     });
 

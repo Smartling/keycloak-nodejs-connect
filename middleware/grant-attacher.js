@@ -21,6 +21,12 @@ module.exports = function (keycloak) {
       .then(grant => {
         request.kauth.grant = grant;
       })
-      .then(next).catch(() => next());
+        .then(next).catch(err => {
+        // err can be undefined
+          if (err) {
+            console.error('Failed to get grant', err);
+          }
+          next();
+        });
   };
 };
