@@ -422,18 +422,16 @@ const fetch = (manager, handler, options, params) => {
     const req = getProtocol(options).request(options, (response) => {
       let json = '';
       response.on('data', (d) => (json += d.toString()));
-      if (response.statusCode < 200 || response.statusCode > 299) {
-        response.on('end', () => {
+      response.on('end', () => {
+        if (response.statusCode < 200 || response.statusCode > 299) {
           const grantType = typeof params === 'object' ? (params.grant_type || '') : '';
           const req = `${options.method}:${options.path} ${grantType}`;
           const resp = `${response.statusCode}: ${http.STATUS_CODES[response.statusCode]} ${json}`;
           reject(new Error(resp + ' on ' + req));
-        });
-      } else {
-        response.on('end', () => {
+        } else {
           handler(resolve, reject, json);
-        });
-      }
+        }
+      });
     });
 
     req.write(data);
