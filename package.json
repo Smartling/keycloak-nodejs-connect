@@ -8,7 +8,6 @@
     "lint": "jshint *.js stores/*.js middleware/*.js middleware/auth-utils/*.js example/*.js",
     "format": "semistandard",
     "test": "tape test/unit/*.js test/*.js",
-    "prepublish": "nsp check",
     "docs": "jsdoc --verbose -d docs -t ./node_modules/ink-docstrap/template -R README.md index.js ./middleware/*.js stores/*.js ./middleware/auth-utils/*.js",
     "coverage": "istanbul cover tape test/unit/*.js tape test/*.js"
   },
@@ -44,7 +43,6 @@
     "coveralls": "^2.11.4",
     "jsdoc": "^3.4.3",
     "jshint": "^2.9.4",
-    "nsp": "^2.6.2",
     "semistandard": "^9.2.1",
     "tape": "^4.6.3",
     "tape-catch": "^1.0.6",
