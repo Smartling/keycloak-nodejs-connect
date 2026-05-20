@@ -48,7 +48,7 @@
     "tape-catch": "^1.0.6",
     "blue-tape": "^1.0.0",
     "rsa-compat": "^1.2.7",
-    "keycloak-admin-client": "bucharest-gold/keycloak-admin-client",
+    "@keycloak/keycloak-admin-client": "20.0.5",
     "keycloak-request-token": "^0.1.0",
     "hogan-express": "^0.5.2",
     "selenium-webdriver": "^2.52.0",

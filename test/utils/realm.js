@@ -15,14 +15,24 @@
  */
 'use strict';
 /**
- * A wrapper to keycloak-admin-client with an initial setup
+ * A wrapper to @keycloak/keycloak-admin-client with an initial setup
  */
-const keycloakAdminClient = require('keycloak-admin-client');
 const parse = require('./helper').parse;
 const settings = require('./config');
 const realmTemplate = 'test/fixtures/testrealm.json';
 
-var kca = keycloakAdminClient(settings);
+// Split baseUrl (connection config) from credentials. The admin client takes
+// baseUrl in the constructor and only username/password/grantType/clientId
+// in auth().
+const { baseUrl, ...credentials } = settings;
+
+// The package is ESM-only, so use dynamic import() from this CommonJS module.
+var kca = import('@keycloak/keycloak-admin-client').then(async (mod) => {
+  const KcAdminClient = mod.default;
+  const client = new KcAdminClient({ baseUrl });
+  await client.auth(credentials);
+  return client;
+});
 
 /**
  * Create realms based on port and name specified
@@ -49,8 +59,16 @@ function createRealm (realmName) {
 function createClient (clientRep, realmName) {
   var realm = realmName || 'test-realm';
   return kca.then((client) => {
-    return client.clients.create(realm, clientRep).then((rep) => {
-      return client.clients.installation(realm, rep.id);
+    return client.clients.create(Object.assign({}, clientRep, { realm })).then((rep) => {
+      return client.clients.getInstallationProviders({
+        id: rep.id,
+        providerId: 'keycloak-oidc-keycloak-json',
+        realm: realm
+      });
+    }).then((installation) => {
+      // Axios auto-parses application/json responses, but the typed signature
+      // is Promise<string>. Handle both shapes.
+      return typeof installation === 'string' ? JSON.parse(installation) : installation;
     });
   }).catch(err => {
     console.error(err);
@@ -62,7 +80,7 @@ function createClient (clientRep, realmName) {
  */
 function destroy (realm) {
   kca.then((client) => {
-    return client.realms.remove(realm);
+    return client.realms.del({ realm });
   }).catch((err) => {
     console.error('Realm was not found to remove:', err);
   });
