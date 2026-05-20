@@ -5,7 +5,7 @@
   "homepage": "http://keycloak.org",
   "main": "index.js",
   "scripts": {
-    "lint": "eslint *.js stores/*.js middleware/*.js middleware/auth-utils/*.js example/*.js",
+    "lint": "eslint ./ --ext .js",
     "format": "semistandard",
     "test": "tape test/unit/*.js test/*.js",
     "docs": "jsdoc --verbose -d docs -t ./node_modules/ink-docstrap/template -R README.md index.js ./middleware/*.js stores/*.js ./middleware/auth-utils/*.js",
