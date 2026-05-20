@@ -341,6 +341,12 @@ GrantManager.prototype.validateToken = function validateToken (token) {
     } else if (token.content.iss !== this.realmUrl) {
       reject(new Error('invalid token (wrong ISS)'));
     } else {
+      // KC26 internal tokens (e.g. refresh_token) are HS512-signed with a
+      // realm-side secret that clients never have. Skip RSA verification —
+      // KC will validate the token when it is presented for refresh.
+      if (token.header && token.header.alg && token.header.alg.startsWith('HS')) {
+        return resolve(token);
+      }
       const verify = crypto.createVerify('RSA-SHA256');
       // if public key has been supplied use it to validate token
       if (this.publicKey) {

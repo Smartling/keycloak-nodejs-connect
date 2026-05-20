@@ -450,6 +450,72 @@ test('GrantManager should fail with invalid signature', (t) => {
     .then(t.end);
 });
 
+// AUT-1352: KC26 signs internal tokens (e.g. refresh_token) with HS512 using a
+// realm-side secret that clients never have. validateToken must skip RSA
+// verification for HS*-signed tokens and resolve them as-is.
+test('GrantManager should skip RSA verification for HS512-signed tokens', (t) => {
+  manager.obtainDirectly('test-user', 'tiger')
+    .then((grant) => {
+      const token = grant.access_token;
+      token.header.alg = 'HS512';
+      // Corrupt the signature so the RSA path would fail if it ran.
+      token.signature = new Buffer('this signature is invalid');
+      return manager.validateToken(token);
+    })
+    .then((validated) => {
+      t.notEqual(validated, undefined);
+      t.equal(validated.header.alg, 'HS512');
+    })
+    .catch((e) => t.fail('HS-signed token should resolve, got: ' + e.message))
+    .then(t.end);
+});
+
+test('GrantManager should skip RSA verification for HS256-signed tokens', (t) => {
+  manager.obtainDirectly('test-user', 'tiger')
+    .then((grant) => {
+      const token = grant.access_token;
+      token.header.alg = 'HS256';
+      token.signature = new Buffer('this signature is invalid');
+      return manager.validateToken(token);
+    })
+    .then((validated) => {
+      t.notEqual(validated, undefined);
+      t.equal(validated.header.alg, 'HS256');
+    })
+    .catch((e) => t.fail('HS-signed token should resolve, got: ' + e.message))
+    .then(t.end);
+});
+
+test('GrantManager should still RSA-verify tokens whose alg does not start with HS', (t) => {
+  manager.obtainDirectly('test-user', 'tiger')
+    .then((grant) => {
+      const token = grant.access_token;
+      token.header.alg = 'RS256';
+      token.signature = new Buffer('this signature is invalid');
+      return manager.validateToken(token);
+    })
+    .then(() => t.fail('non-HS token with bad signature should not resolve'))
+    .catch((e) => {
+      t.equal(e.message, 'invalid token (public key signature)');
+    })
+    .then(t.end);
+});
+
+test('GrantManager should not bypass other validation checks for HS-signed tokens', (t) => {
+  manager.obtainDirectly('test-user', 'tiger')
+    .then((grant) => {
+      const token = grant.access_token;
+      token.header.alg = 'HS512';
+      token.content.iss = 'http://wrongiss.com';
+      return manager.validateToken(token);
+    })
+    .then(() => t.fail('wrong ISS should still reject for HS-signed tokens'))
+    .catch((e) => {
+      t.equal(e.message, 'invalid token (wrong ISS)');
+    })
+    .then(t.end);
+});
+
 test('GrantManager#obtainDirectly should work with https', (t) => {
   nock('https://localhost:8080')
     .post('/auth/realms/nodejs-test/protocol/openid-connect/token', {
