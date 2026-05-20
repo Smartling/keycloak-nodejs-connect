@@ -19,7 +19,6 @@ node {
     }
     stage('Lint') {
         sh "npm run lint"
-        sh "npm run format"
     }
     stage('Publish') {
         sh "npm publish"
