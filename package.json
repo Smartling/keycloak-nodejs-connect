@@ -69,6 +69,6 @@
   },
   "bugs": "https://github.com/keycloak/keycloak-nodejs-connect/issues",
   "publishConfig": {
-    "registry": "https://artifactory.smartling.net/artifactory/api/npm/local-tms-frontend"
+    "registry": "https://artifactory.smartling.net/artifactory/api/npm/local-tms-frontend/"
   }
 }
