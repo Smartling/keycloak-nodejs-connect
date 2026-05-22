@@ -40,6 +40,7 @@ function GrantManager (config) {
   this.bearerOnly = config.bearerOnly;
   this.notBefore = 0;
   this.rotation = new Rotation(config);
+  this.tokenMinTtl = config.tokenMinTtl;
 }
 
 /**
@@ -141,7 +142,7 @@ GrantManager.prototype.obtainFromClientCredentials = function obtainFromlientCre
  * @param {Function} callback Optional callback if promises are not used.
  */
 GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callback) {
-  if (!grant.isExpired()) {
+  if (!grant.isExpired() && !grant.willTokenExpireBeforeTimeToLive(this.tokenMinTtl)) {
     return nodeify(Promise.resolve(grant), callback);
   }
 
@@ -204,7 +205,7 @@ GrantManager.prototype.userInfo = function userInfo (token, callback) {
   const promise = new Promise((resolve, reject) => {
     const req = getProtocol(options).request(options, (response) => {
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        return reject('Error fetching account');
+        return reject(new Error('Error fetching account'));
       }
       let json = '';
       response.on('data', (d) => (json += d.toString()));
@@ -340,6 +341,12 @@ GrantManager.prototype.validateToken = function validateToken (token) {
     } else if (token.content.iss !== this.realmUrl) {
       reject(new Error('invalid token (wrong ISS)'));
     } else {
+      // KC26 internal tokens (e.g. refresh_token) are HS512-signed with a
+      // realm-side secret that clients never have. Skip RSA verification —
+      // KC will validate the token when it is presented for refresh.
+      if (token.header && token.header.alg && token.header.alg.startsWith('HS')) {
+        return resolve(token);
+      }
       const verify = crypto.createVerify('RSA-SHA256');
       // if public key has been supplied use it to validate token
       if (this.publicKey) {
@@ -362,8 +369,8 @@ GrantManager.prototype.validateToken = function validateToken (token) {
           } else {
             resolve(token);
           }
-        }, () => {
-          reject(new Error('failed to load public key to verify token'));
+        }).catch((err) => {
+          reject(new Error('failed to load public key to verify token. Reason: ' + err));
         });
       }
     }
@@ -419,13 +426,17 @@ const fetch = (manager, handler, options, params) => {
     options.headers['Content-Length'] = data.length;
 
     const req = getProtocol(options).request(options, (response) => {
-      if (response.statusCode < 200 || response.statusCode > 299) {
-        return reject(response.statusCode + ':' + http.STATUS_CODES[ response.statusCode ]);
-      }
       let json = '';
       response.on('data', (d) => (json += d.toString()));
       response.on('end', () => {
-        handler(resolve, reject, json);
+        if (response.statusCode < 200 || response.statusCode > 299) {
+          const grantType = typeof params === 'object' ? (params.grant_type || '') : '';
+          const req = `${options.method}:${options.path} ${grantType}`;
+          const resp = `${response.statusCode}: ${http.STATUS_CODES[response.statusCode]} ${json}`;
+          reject(new Error(resp + ' on ' + req));
+        } else {
+          handler(resolve, reject, json);
+        }
       });
     });
 

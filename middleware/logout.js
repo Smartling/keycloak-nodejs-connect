@@ -17,7 +17,7 @@
 
 module.exports = function (keycloak, logoutUrl) {
   return function logout (request, response, next) {
-    if (request.url !== logoutUrl) {
+    if (request.path !== logoutUrl) {
       return next();
     }
 
@@ -30,7 +30,7 @@ module.exports = function (keycloak, logoutUrl) {
     let host = request.hostname;
     let headerHost = request.headers.host.split(':');
     let port = headerHost[1] || '';
-    let redirectUrl = request.protocol + '://' + host + (port === '' ? '' : ':' + port) + '/';
+    let redirectUrl = request.query.redirectUrl || request.protocol + '://' + host + (port === '' ? '' : ':' + port) + '/';
     let keycloakLogoutUrl = keycloak.logoutUrl(redirectUrl);
 
     response.redirect(keycloakLogoutUrl);

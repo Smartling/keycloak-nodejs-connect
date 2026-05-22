@@ -39,6 +39,7 @@ function Token (token, clientId) {
       this.signature = new Buffer(parts[2], 'base64');
       this.signed = parts[0] + '.' + parts[1];
     } catch (err) {
+      console.error('Failed to parse JWT token: ' + err);
       this.content = {
         exp: 0
       };
@@ -53,6 +54,15 @@ function Token (token, clientId) {
  */
 Token.prototype.isExpired = function isExpired () {
   return ((this.content.exp * 1000) < Date.now());
+};
+
+/**
+ * Determine if this token is will expire before the end of its TTL.
+ *
+ * @return {boolean} `true` if it will expire, otherwise `false`.
+ */
+Token.prototype.willTokenExpireBeforeTimeToLive = function willTokenExpireBeforeTimeToLive (ttl) {
+  return ((this.content.exp - ttl) * 1000 < Date.now());
 };
 
 /**

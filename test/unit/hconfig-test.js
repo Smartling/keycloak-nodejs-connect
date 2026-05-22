@@ -47,6 +47,20 @@ test('Config#configure with env variable reference set with fallback', (t) => {
   t.end();
 });
 
+test('Config#configure with minimum time to live', (t) => {
+  let cfg = new Config({'token-minimum-time-to-live': 80});
+
+  t.equal(cfg.tokenMinTtl, 80);
+  t.end();
+});
+
+test('Config#configure with minimum time to live defaults to zero', (t) => {
+  let cfg = new Config({});
+
+  t.equal(cfg.tokenMinTtl, 0);
+  t.end();
+});
+
 test('Config#configure with realm-public-key', (t) => {
   t.plan(2);
   RSA.generateKeypair(2048, 65537, { public: true, pem: true }, (err, keyz) => {

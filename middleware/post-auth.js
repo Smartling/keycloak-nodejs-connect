@@ -44,7 +44,7 @@ module.exports = function (keycloak) {
         try {
           keycloak.authenticated(request);
         } catch (err) {
-          console.log(err);
+          console.error(err);
         }
         response.redirect(cleanUrl);
       }).catch((err) => {
