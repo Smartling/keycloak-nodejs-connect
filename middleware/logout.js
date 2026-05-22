@@ -21,17 +21,19 @@ module.exports = function (keycloak, logoutUrl) {
       return next();
     }
 
+    let host = request.hostname;
+    let headerHost = request.headers.host.split(':');
+    let port = headerHost[1] || '';
+    let redirectUrl = request.query.redirectUrl || request.protocol + '://' + host + (port === '' ? '' : ':' + port) + '/';
+
+    const idTokenHint = request.kauth.grant.id_token && request.kauth.grant.id_token.token;
+    let keycloakLogoutUrl = keycloak.logoutUrl(redirectUrl, idTokenHint);
+
     if (request.kauth.grant) {
       keycloak.deauthenticated(request);
       request.kauth.grant.unstore(request, response);
       delete request.kauth.grant;
     }
-
-    let host = request.hostname;
-    let headerHost = request.headers.host.split(':');
-    let port = headerHost[1] || '';
-    let redirectUrl = request.query.redirectUrl || request.protocol + '://' + host + (port === '' ? '' : ':' + port) + '/';
-    let keycloakLogoutUrl = keycloak.logoutUrl(redirectUrl);
 
     response.redirect(keycloakLogoutUrl);
   };
