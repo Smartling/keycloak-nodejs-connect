@@ -112,6 +112,23 @@ test('logout middleware: does not throw when grant has no id_token', t => {
   t.end();
 });
 
+test('logout middleware: does not throw when kauth has no grant (expired session)', t => {
+  const { keycloak, calls } = buildKeycloakStub();
+  const middleware = logoutMiddleware(keycloak, '/logout');
+  const req = buildRequest();
+  delete req.kauth.grant;
+  const res = buildResponse();
+
+  t.doesNotThrow(() => {
+    middleware(req, res, () => t.fail('next() should not be called'));
+  });
+  t.equal(calls.logoutUrl.length, 1, 'logoutUrl should still be invoked');
+  t.equal(calls.logoutUrl[0].idTokenHint, undefined, 'idTokenHint should be undefined when grant is absent');
+  t.equal(calls.deauthenticated, 0, 'deauthenticated should not be invoked without a grant');
+  t.equal(res._redirects.length, 1, 'request should still be redirected');
+  t.end();
+});
+
 test('logout middleware: builds redirect URL from request.protocol/hostname when no query.redirectUrl', t => {
   const { keycloak, calls } = buildKeycloakStub();
   const middleware = logoutMiddleware(keycloak, '/logout');
