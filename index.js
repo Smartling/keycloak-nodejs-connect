@@ -319,7 +319,7 @@ Keycloak.prototype.loginUrl = function (uuid, redirectUrl) {
 Keycloak.prototype.logoutUrl = function (redirectUrl, idTokenHint) {
   var url = this.config.realmUrl +
     '/protocol/openid-connect/logout' +
-    '?redirect_uri=' + encodeURIComponent(redirectUrl);
+    '?post_logout_redirect_uri=' + encodeURIComponent(redirectUrl);
   if (idTokenHint) {
     url += '&id_token_hint=' + encodeURIComponent(idTokenHint) +
            '&client_id=' + encodeURIComponent(this.config.clientId);

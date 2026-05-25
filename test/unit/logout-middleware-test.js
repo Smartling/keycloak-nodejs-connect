@@ -24,7 +24,7 @@ function buildKeycloakStub () {
   const keycloak = {
     logoutUrl: function (redirectUrl, idTokenHint) {
       calls.logoutUrl.push({ redirectUrl, idTokenHint });
-      return 'http://keycloak.example/logout?redirect_uri=' +
+      return 'http://keycloak.example/logout?post_logout_redirect_uri=' +
         encodeURIComponent(redirectUrl) +
         (idTokenHint ? '&id_token_hint=' + encodeURIComponent(idTokenHint) : '');
     },
