@@ -70,10 +70,11 @@ test('Should verify if logout URL has the configured realm.', t => {
   t.end();
 });
 
-test('Should include redirect_uri in logout URL.', t => {
+test('Should include post_logout_redirect_uri (OIDC RP-Initiated Logout) in logout URL.', t => {
   const redirectUrl = 'http://example.com/done';
   const url = kc.logoutUrl(redirectUrl);
-  t.equal(url.indexOf('redirect_uri=' + encodeURIComponent(redirectUrl)) > 0, true);
+  t.equal(url.indexOf('post_logout_redirect_uri=' + encodeURIComponent(redirectUrl)) > 0, true, 'post_logout_redirect_uri should be present');
+  t.equal(/[?&]redirect_uri=/.test(url), false, 'legacy redirect_uri should not be present');
   t.end();
 });
 

@@ -24,7 +24,7 @@ function buildKeycloakStub () {
   const keycloak = {
     logoutUrl: function (redirectUrl, idTokenHint) {
       calls.logoutUrl.push({ redirectUrl, idTokenHint });
-      return 'http://keycloak.example/logout?redirect_uri=' +
+      return 'http://keycloak.example/logout?post_logout_redirect_uri=' +
         encodeURIComponent(redirectUrl) +
         (idTokenHint ? '&id_token_hint=' + encodeURIComponent(idTokenHint) : '');
     },
@@ -129,7 +129,7 @@ test('logout middleware: does not throw when kauth has no grant (expired session
   t.end();
 });
 
-test('logout middleware: builds redirect URL from request.protocol/hostname when no query.redirectUrl', t => {
+test('logout middleware: builds redirect URL from request.protocol/hostname when no query.post_logout_redirect_uri', t => {
   const { keycloak, calls } = buildKeycloakStub();
   const middleware = logoutMiddleware(keycloak, '/logout');
   const req = buildRequest();
@@ -153,15 +153,27 @@ test('logout middleware: includes port in default redirect URL when present in h
   t.end();
 });
 
-test('logout middleware: uses query.redirectUrl when provided', t => {
+test('logout middleware: uses query.post_logout_redirect_uri when provided', t => {
   const { keycloak, calls } = buildKeycloakStub();
   const middleware = logoutMiddleware(keycloak, '/logout');
-  const req = buildRequest({ query: { redirectUrl: 'http://elsewhere.example/done' } });
+  const req = buildRequest({ query: { post_logout_redirect_uri: 'http://elsewhere.example/done' } });
   const res = buildResponse();
 
   middleware(req, res, () => t.fail('next() should not be called'));
 
-  t.equal(calls.logoutUrl[0].redirectUrl, 'http://elsewhere.example/done', 'query.redirectUrl should be used');
+  t.equal(calls.logoutUrl[0].redirectUrl, 'http://elsewhere.example/done', 'query.post_logout_redirect_uri should be used');
+  t.end();
+});
+
+test('logout middleware: ignores the legacy query.redirectUrl param', t => {
+  const { keycloak, calls } = buildKeycloakStub();
+  const middleware = logoutMiddleware(keycloak, '/logout');
+  const req = buildRequest({ query: { redirectUrl: 'http://legacy.example/done' } });
+  const res = buildResponse();
+
+  middleware(req, res, () => t.fail('next() should not be called'));
+
+  t.equal(calls.logoutUrl[0].redirectUrl, 'http://app.example/', 'legacy redirectUrl should be ignored, falling back to host-derived URL');
   t.end();
 });
 
