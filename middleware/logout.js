@@ -24,7 +24,7 @@ module.exports = function (keycloak, logoutUrl) {
     let host = request.hostname;
     let headerHost = request.headers.host.split(':');
     let port = headerHost[1] || '';
-    let redirectUrl = request.query.post_logout_redirect_uri || request.protocol + '://' + host + (port === '' ? '' : ':' + port) + '/';
+    let redirectUrl = request.query.redirectUrl || request.protocol + '://' + host + (port === '' ? '' : ':' + port) + '/';
 
     const idTokenHint = request.kauth.grant && request.kauth.grant.id_token && request.kauth.grant.id_token.token;
     let keycloakLogoutUrl = keycloak.logoutUrl(redirectUrl, idTokenHint);
