@@ -70,6 +70,35 @@ test('Should verify if logout URL has the configured realm.', t => {
   t.end();
 });
 
+test('Should include redirect_uri in logout URL.', t => {
+  const redirectUrl = 'http://example.com/done';
+  const url = kc.logoutUrl(redirectUrl);
+  t.equal(url.indexOf('redirect_uri=' + encodeURIComponent(redirectUrl)) > 0, true);
+  t.end();
+});
+
+test('Should not include id_token_hint or client_id when idTokenHint is omitted.', t => {
+  const url = kc.logoutUrl('http://example.com/done');
+  t.equal(url.indexOf('id_token_hint') === -1, true, 'id_token_hint should not be present');
+  t.equal(url.indexOf('client_id') === -1, true, 'client_id should not be present');
+  t.end();
+});
+
+test('Should append id_token_hint and client_id when idTokenHint is provided.', t => {
+  const idToken = 'fake.id.token';
+  const url = kc.logoutUrl('http://example.com/done', idToken);
+  t.equal(url.indexOf('id_token_hint=' + encodeURIComponent(idToken)) > 0, true, 'id_token_hint should be appended');
+  t.equal(url.indexOf('client_id=' + encodeURIComponent(kc.config.clientId)) > 0, true, 'client_id should be appended');
+  t.end();
+});
+
+test('Should treat a falsy idTokenHint the same as no hint.', t => {
+  const url = kc.logoutUrl('http://example.com/done', '');
+  t.equal(url.indexOf('id_token_hint') === -1, true, 'id_token_hint should not be present for empty string');
+  t.equal(url.indexOf('client_id') === -1, true, 'client_id should not be present for empty string');
+  t.end();
+});
+
 test('Should generate a correct UUID.', t => {
   const rgx = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
   t.equal(rgx.test(UUID()), true);

@@ -20,10 +20,12 @@ node {
     stage('Lint') {
         sh "npm run lint"
     }
-    stage('Publish') {
-        sshagent (credentials: ['bb0927b6-318c-4e4a-a3d8-ac89152185df']) {
-            sh "npm config list"
-            sh "npm publish --loglevel silly"
+    if (gitBranch == "master") {
+        stage('Publish') {
+            sshagent (credentials: ['bb0927b6-318c-4e4a-a3d8-ac89152185df']) {
+                sh "npm config list"
+                sh "npm publish --loglevel silly"
+            }
         }
     }
 }

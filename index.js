@@ -316,11 +316,17 @@ Keycloak.prototype.loginUrl = function (uuid, redirectUrl) {
   '&response_type=code';
 };
 
-Keycloak.prototype.logoutUrl = function (redirectUrl) {
-  return this.config.realmUrl +
-  '/protocol/openid-connect/logout' +
-  '?redirect_uri=' + encodeURIComponent(redirectUrl);
+Keycloak.prototype.logoutUrl = function (redirectUrl, idTokenHint) {
+  var url = this.config.realmUrl +
+    '/protocol/openid-connect/logout' +
+    '?redirect_uri=' + encodeURIComponent(redirectUrl);
+  if (idTokenHint) {
+    url += '&id_token_hint=' + encodeURIComponent(idTokenHint) +
+           '&client_id=' + encodeURIComponent(this.config.clientId);
+  }
+  return url;
 };
+
 
 Keycloak.prototype.accountUrl = function () {
   return this.config.realmUrl + '/account';
