@@ -34,7 +34,7 @@
     "jwk-to-pem": "^1.2.6"
   },
   "devDependencies": {
-    "@keycloak/keycloak-admin-client": "20.0.5",
+    "@keycloak/keycloak-admin-client": "26.6.3",
     "blue-tape": "^1.0.0",
     "body-parser": "^1.13.3",
     "coveralls": "^2.11.4",
