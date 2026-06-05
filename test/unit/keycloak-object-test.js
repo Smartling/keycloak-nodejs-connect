@@ -74,18 +74,19 @@ test('Should include post_logout_redirect_uri (OIDC RP-Initiated Logout) in logo
   const redirectUrl = 'http://example.com/done';
   const url = kc.logoutUrl(redirectUrl);
   t.equal(url.indexOf('post_logout_redirect_uri=' + encodeURIComponent(redirectUrl)) > 0, true, 'post_logout_redirect_uri should be present');
+  t.equal(url.indexOf('client_id=' + encodeURIComponent(kc.config.clientId)) > 0, true, 'client_id should be present');
   t.equal(/[?&]redirect_uri=/.test(url), false, 'legacy redirect_uri should not be present');
   t.end();
 });
 
-test('Should not include id_token_hint or client_id when idTokenHint is omitted.', t => {
+test('Should not include id_token_hint when idTokenHint is omitted.', t => {
   const url = kc.logoutUrl('http://example.com/done');
   t.equal(url.indexOf('id_token_hint') === -1, true, 'id_token_hint should not be present');
-  t.equal(url.indexOf('client_id') === -1, true, 'client_id should not be present');
+  t.equal(url.indexOf('client_id=' + encodeURIComponent(kc.config.clientId)) > 0, true, 'client_id should be present');
   t.end();
 });
 
-test('Should append id_token_hint and client_id when idTokenHint is provided.', t => {
+test('Should append id_token_hint when idTokenHint is provided.', t => {
   const idToken = 'fake.id.token';
   const url = kc.logoutUrl('http://example.com/done', idToken);
   t.equal(url.indexOf('id_token_hint=' + encodeURIComponent(idToken)) > 0, true, 'id_token_hint should be appended');
@@ -96,7 +97,7 @@ test('Should append id_token_hint and client_id when idTokenHint is provided.', 
 test('Should treat a falsy idTokenHint the same as no hint.', t => {
   const url = kc.logoutUrl('http://example.com/done', '');
   t.equal(url.indexOf('id_token_hint') === -1, true, 'id_token_hint should not be present for empty string');
-  t.equal(url.indexOf('client_id') === -1, true, 'client_id should not be present for empty string');
+  t.equal(url.indexOf('client_id=' + encodeURIComponent(kc.config.clientId)) > 0, true, 'client_id should be appended');
   t.end();
 });
 
