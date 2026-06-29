@@ -41,6 +41,7 @@ function GrantManager (config) {
   this.notBefore = 0;
   this.rotation = new Rotation(config);
   this.tokenMinTtl = config.tokenMinTtl;
+  this._pendingRefreshes = new Map();
 }
 
 /**
@@ -154,6 +155,18 @@ GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callba
     return nodeify(Promise.reject(new Error('Unable to refresh with expired refresh token')), callback);
   }
 
+  if (!grant.isExpired() && grant.access_token && this.tokenMinTtl) {
+    // KC26 caps token lifetime to min(configuredLifespan, remainingSessionTime) near session end.
+    // A normal token has exp-iat == configuredLifespan (e.g. 480s). A session-capped token has a
+    // shorter issued lifetime. When issuedLifetime < tokenMinTtl the session is so close to its
+    // maximum lifespan that another refresh would only produce another capped token — redirect to
+    // login instead.
+    const issuedLifetime = grant.access_token.content.exp - grant.access_token.content.iat;
+    if (issuedLifetime < this.tokenMinTtl) {
+      return nodeify(Promise.reject(new Error('Session near maximum lifespan: re-login required')), callback);
+    }
+  }
+
   const params = {
     grant_type: 'refresh_token',
     refresh_token: grant.refresh_token.token
@@ -161,7 +174,21 @@ GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callba
   const handler = refreshHandler(this, grant);
   const options = postOptions(this);
 
-  return nodeify(fetch(this, handler, options, params), callback);
+  const refreshJti = grant.refresh_token.content?.jti;
+  if (refreshJti && this._pendingRefreshes.has(refreshJti)) {
+    return nodeify(this._pendingRefreshes.get(refreshJti), callback);
+  }
+
+  const refreshPromise = fetch(this, handler, options, params);
+  if (refreshJti) {
+    this._pendingRefreshes.set(refreshJti, refreshPromise);
+    refreshPromise.then(
+      () => this._pendingRefreshes.delete(refreshJti),
+      () => this._pendingRefreshes.delete(refreshJti)
+    );
+  }
+
+  return nodeify(refreshPromise, callback);
 };
 
 /**
