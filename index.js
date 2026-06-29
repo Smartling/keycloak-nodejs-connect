@@ -259,6 +259,9 @@ Keycloak.prototype.getGrant = function (request, response) {
       return grant;
     })
     .catch((e) => {
+      // Pass Error instances through unchanged so structured rejections (e.g. session-cap guard)
+      // reach the caller with their original message rather than being re-wrapped.
+      if (e instanceof Error) return Promise.reject(e);
       return Promise.reject(new Error('Could not store grant code error. ' + e));
     });
   }

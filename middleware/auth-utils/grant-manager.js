@@ -156,6 +156,11 @@ GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callba
   }
 
   if (!grant.isExpired() && grant.access_token && this.tokenMinTtl) {
+    // KC26 caps token lifetime to min(configuredLifespan, remainingSessionTime) near session end.
+    // A normal token has exp-iat == configuredLifespan (e.g. 480s). A session-capped token has a
+    // shorter issued lifetime. When issuedLifetime < tokenMinTtl the session is so close to its
+    // maximum lifespan that another refresh would only produce another capped token — redirect to
+    // login instead.
     const issuedLifetime = grant.access_token.content.exp - grant.access_token.content.iat;
     if (issuedLifetime < this.tokenMinTtl) {
       return nodeify(Promise.reject(new Error('Session near maximum lifespan: re-login required')), callback);
@@ -169,7 +174,7 @@ GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callba
   const handler = refreshHandler(this, grant);
   const options = postOptions(this);
 
-  const refreshJti = grant.refresh_token.content && grant.refresh_token.content.jti;
+  const refreshJti = grant.refresh_token.content?.jti;
   if (refreshJti && this._pendingRefreshes.has(refreshJti)) {
     return nodeify(this._pendingRefreshes.get(refreshJti), callback);
   }

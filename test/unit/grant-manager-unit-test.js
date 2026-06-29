@@ -24,7 +24,7 @@ function nowSec () {
 
 // Builds a plain-object grant with the right interface for ensureFreshness.
 // atExp/atIat in seconds-since-epoch. rtJti is the refresh token jti (string or null).
-// rtExpired controls whether refresh_token.isExpired() returns true.
+// rtExpired controls whether refresh_token.isExpired() returns true (default false).
 function makeGrant ({ atExp, atIat, rtJti, rtExpired = false }) {
   return {
     access_token: atExp !== undefined ? {
@@ -32,7 +32,8 @@ function makeGrant ({ atExp, atIat, rtJti, rtExpired = false }) {
     } : undefined,
     refresh_token: {
       token: 'fake-refresh-token',
-      content: rtJti ? { jti: rtJti } : {}
+      content: rtJti ? { jti: rtJti } : {},
+      isExpired: () => rtExpired
     },
     isExpired: function () {
       if (!this.access_token) return true;
@@ -41,9 +42,7 @@ function makeGrant ({ atExp, atIat, rtJti, rtExpired = false }) {
     willTokenExpireBeforeTimeToLive: function (ttl) {
       if (!this.access_token) return true;
       return (atExp - ttl) * 1000 < Date.now();
-    },
-    // refresh_token.isExpired is a separate function
-    _rtExpired: rtExpired
+    }
   };
 }
 
@@ -53,10 +52,10 @@ function withRtExpired (grant, expired) {
   return grant;
 }
 
-// ─── Fix 2: Session-cap detection ────────────────────────────────────────────
+// ─── Session-cap detection ───────────────────────────────────────────────────
 
 // Helper: mock createGrant to avoid HTTP calls and JWT validation.
-// This allows ensureFreshness to proceed past Fix 2 without hitting network issues.
+// This allows ensureFreshness to proceed past the session-cap guard without hitting the network.
 function setupPassThroughRefresh (mgr, grant) {
   nock.cleanAll();
   nock(KC_HOST)
@@ -123,7 +122,7 @@ test('token with issued lifetime equal to min-ttl boundary is not treated as cap
   const grant = withRtExpired(makeGrant({ atExp: n + 80, atIat: n - 10, rtJti: 'jti-5' }), false);
   setupPassThroughRefresh(mgr, grant);
   mgr.ensureFreshness(grant)
-    .then(() => { t.pass('resolved without Fix 2 rejection'); t.end(); })
+    .then(() => { t.pass('resolved without session-cap rejection'); t.end(); })
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
@@ -134,7 +133,7 @@ test('token with normal 480s issued lifetime proceeds to normal refresh', t => {
   const grant = withRtExpired(makeGrant({ atExp: n + 470, atIat: n - 10, rtJti: 'jti-6' }), false);
   setupPassThroughRefresh(mgr, grant);
   mgr.ensureFreshness(grant)
-    .then(() => { t.pass('resolved without Fix 2 rejection'); t.end(); })
+    .then(() => { t.pass('resolved without session-cap rejection'); t.end(); })
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
@@ -146,7 +145,7 @@ test('expired token with short issued lifetime falls through to normal refresh p
   // exp - iat = 88 < 90, but isExpired() is true → Fix 2 skipped
   setupPassThroughRefresh(mgr, grant);
   mgr.ensureFreshness(grant)
-    .then(() => { t.pass('resolved without Fix 2 rejection'); t.end(); })
+    .then(() => { t.pass('resolved without session-cap rejection'); t.end(); })
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
@@ -157,7 +156,7 @@ test('min-ttl of zero disables session-cap detection', t => {
   const n = nowSec();
   const grant = withRtExpired(makeGrant({ atExp: n + 86, atIat: n - 2, rtJti: 'jti-8' }), false);
   mgr.ensureFreshness(grant)
-    .then(() => { t.pass('returned early as fresh (Fix 2 never reached)'); t.end(); })
+    .then(() => { t.pass('returned early as fresh (session-cap guard never reached)'); t.end(); })
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
@@ -166,7 +165,7 @@ test('undefined min-ttl disables session-cap detection', t => {
   const n = nowSec();
   const grant = withRtExpired(makeGrant({ atExp: n + 86, atIat: n - 2, rtJti: 'jti-9' }), false);
   mgr.ensureFreshness(grant)
-    .then(() => { t.pass('returned early as fresh (Fix 2 never reached)'); t.end(); })
+    .then(() => { t.pass('returned early as fresh (session-cap guard never reached)'); t.end(); })
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
@@ -180,32 +179,30 @@ test('grant without access token skips session-cap detection', t => {
   };
   setupPassThroughRefresh(mgr, grant);
   mgr.ensureFreshness(grant)
-    .then(() => { t.pass('resolved without Fix 2 rejection'); t.end(); })
+    .then(() => { t.pass('resolved without session-cap rejection'); t.end(); })
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
-// ─── Fix 1: Refresh deduplication ────────────────────────────────────────────
+// ─── Concurrent refresh deduplication ───────────────────────────────────────
 
-// Helper: grant needing refresh (capped token but with tokenMinTtl=0 so Fix 2 skips it),
-// with a jti so dedup applies.
+// Helper: expired grant with a jti so deduplication applies.
+// tokenMinTtl=0 disables session-cap detection, keeping these tests focused on dedup only.
 function makeRefreshNeededGrant (jti) {
   const n = nowSec();
-  // expired token → ensureFreshness proceeds to fetch
   const g = withRtExpired(makeGrant({ atExp: n - 10, atIat: n - 98, rtJti: jti }), false);
   return g;
 }
 
-// Sets up a single nock interceptor and mocks createGrant.
-// Returns the manager so callers can also inspect _pendingRefreshes.
-function setupFix1Manager () {
-  const mgr = makeManager(0); // tokenMinTtl=0 so Fix 2 is never triggered
+// Sets up a manager with session-cap detection disabled (tokenMinTtl=0) and mocks createGrant.
+function setupDedupManager () {
+  const mgr = makeManager(0);
   mgr.createGrant = () => Promise.resolve(makeRefreshNeededGrant('jti-new'));
   return mgr;
 }
 
 test('two concurrent refreshes for the same token share one Keycloak request', t => {
   nock.cleanAll();
-  const mgr = setupFix1Manager();
+  const mgr = setupDedupManager();
   const grant = makeRefreshNeededGrant('jti-dedup-2');
   mgr.createGrant = () => Promise.resolve(grant);
 
@@ -223,7 +220,7 @@ test('two concurrent refreshes for the same token share one Keycloak request', t
 
 test('three concurrent refreshes for the same token share one Keycloak request', t => {
   nock.cleanAll();
-  const mgr = setupFix1Manager();
+  const mgr = setupDedupManager();
   const grant = makeRefreshNeededGrant('jti-dedup-3');
   mgr.createGrant = () => Promise.resolve(grant);
 
@@ -241,7 +238,7 @@ test('three concurrent refreshes for the same token share one Keycloak request',
 
 test('concurrent refreshes all receive the same error when Keycloak rejects', t => {
   nock.cleanAll();
-  const mgr = setupFix1Manager();
+  const mgr = setupDedupManager();
   const grant = makeRefreshNeededGrant('jti-dedup-err');
   mgr.createGrant = () => Promise.resolve(grant);
 
@@ -264,7 +261,7 @@ test('concurrent refreshes all receive the same error when Keycloak rejects', t 
 
 test('after successful refresh the deduplication map is cleared for future requests', t => {
   nock.cleanAll();
-  const mgr = setupFix1Manager();
+  const mgr = setupDedupManager();
   const grant = makeRefreshNeededGrant('jti-dedup-reuse');
   mgr.createGrant = () => Promise.resolve(grant);
 
@@ -287,7 +284,7 @@ test('after successful refresh the deduplication map is cleared for future reque
 
 test('after failed refresh the deduplication map is cleared for future requests', t => {
   nock.cleanAll();
-  const mgr = setupFix1Manager();
+  const mgr = setupDedupManager();
   const grant = makeRefreshNeededGrant('jti-dedup-fail-retry');
   mgr.createGrant = () => Promise.resolve(grant);
 
@@ -309,7 +306,7 @@ test('after failed refresh the deduplication map is cleared for future requests'
 
 test('concurrent refreshes for different tokens each issue separate Keycloak requests', t => {
   nock.cleanAll();
-  const mgr = setupFix1Manager();
+  const mgr = setupDedupManager();
   const grantA = makeRefreshNeededGrant('jti-A');
   const grantB = makeRefreshNeededGrant('jti-B');
   mgr.createGrant = () => Promise.resolve(grantA);
@@ -330,7 +327,7 @@ test('concurrent refreshes for different tokens each issue separate Keycloak req
 
 test('refresh tokens without jti claim bypass deduplication', t => {
   nock.cleanAll();
-  const mgr = setupFix1Manager();
+  const mgr = setupDedupManager();
   // rtJti: null → no jti in refresh token content → dedup skipped
   const grant = withRtExpired(makeGrant({ atExp: nowSec() - 10, atIat: nowSec() - 98, rtJti: null }), false);
   mgr.createGrant = () => Promise.resolve(grant);
@@ -351,7 +348,7 @@ test('refresh tokens without jti claim bypass deduplication', t => {
 
 test('deduplication map is empty after all concurrent refreshes settle', t => {
   nock.cleanAll();
-  const mgr = setupFix1Manager();
+  const mgr = setupDedupManager();
   const grant = makeRefreshNeededGrant('jti-map-check');
   mgr.createGrant = () => Promise.resolve(grant);
 
@@ -370,5 +367,68 @@ test('deduplication map is empty after all concurrent refreshes settle', t => {
       t.end();
     })
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
+// ─── Integration: session-cap guard fires inside createGrant (storm path) ────
+//
+// When KC26 returns a new token with a shorter-than-configured lifetime (exp-iat < tokenMinTtl),
+// the session-cap guard fires inside createGrant → all concurrent callers share the same
+// rejected promise via deduplication and are redirected to login.
+
+// Encode a plain object as base64url so Token can parse it.
+function b64url (obj) {
+  return Buffer.from(JSON.stringify(obj)).toString('base64url');
+}
+
+// Minimal parseable JWT. Signature is not validated: the session-cap guard fires before validateGrant.
+function fakeJWT (payload) {
+  return `${b64url({ alg: 'HS512', typ: 'JWT' })}.${b64url(payload)}.fakesig`;
+}
+
+test('session-cap guard fires inside createGrant when KC returns a capped token, rejecting all concurrent callers', t => {
+  nock.cleanAll();
+
+  const mgr = makeManager(90);
+  const now = Math.floor(Date.now() / 1000);
+
+  // Session grant: 480s-configured-lifetime token, 88s remaining.
+  // willTokenExpireBeforeTimeToLive(90)=true → passes freshness guard, proceeds to KC refresh call.
+  // exp-iat=480 >= tokenMinTtl=90 → session-cap guard does NOT fire on this grant.
+  const sessionGrant = withRtExpired(makeGrant({
+    atExp: now + 88,
+    atIat: now + 88 - 480,
+    rtJti: 'jti-storm'
+  }), false);
+
+  // KC responds with a capped 88s token (exp-iat=88 < tokenMinTtl=90).
+  // refreshHandler calls createGrant(json) → createGrant calls ensureFreshness(newGrant)
+  // → session-cap guard fires on newGrant → refreshPromise rejects → all concurrent callers rejected.
+  nock(KC_HOST)
+    .post(KC_TOKEN_PATH)
+    .once()
+    .reply(200, JSON.stringify({
+      access_token: fakeJWT({ exp: now + 88, iat: now }),
+      refresh_token: fakeJWT({ exp: now + 3600, iat: now, jti: 'rt-new' }),
+      token_type: 'bearer',
+      expires_in: 88
+    }));
+
+  const p1 = mgr.ensureFreshness(sessionGrant);
+  const p2 = mgr.ensureFreshness(sessionGrant);
+  const p3 = mgr.ensureFreshness(sessionGrant);
+
+  t.equal(mgr._pendingRefreshes.size, 1, 'dedup: one in-flight KC call for the session');
+
+  Promise.all([p1.catch(e => e), p2.catch(e => e), p3.catch(e => e)])
+    .then(([e1, e2, e3]) => {
+      t.ok(e1 instanceof Error, 'all callers rejected with Error');
+      t.equal(e1.message, 'Session near maximum lifespan: re-login required',
+        'session-cap error message propagates through refreshPromise to all callers');
+      t.equal(e1, e2, 'p2 shares same rejection object as p1 (dedup)');
+      t.equal(e1, e3, 'p3 shares same rejection object as p1 (dedup)');
+      t.equal(mgr._pendingRefreshes.size, 0, 'map cleared after rejection');
+      t.equal(nock.pendingMocks().length, 0, 'exactly one KC token call made');
+      t.end();
+    });
 });
 
