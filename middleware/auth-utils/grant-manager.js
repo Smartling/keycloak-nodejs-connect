@@ -154,6 +154,13 @@ GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callba
     return nodeify(Promise.reject(new Error('Unable to refresh with expired refresh token')), callback);
   }
 
+  if (!grant.isExpired() && grant.access_token && this.tokenMinTtl) {
+    const issuedLifetime = grant.access_token.content.exp - grant.access_token.content.iat;
+    if (issuedLifetime < this.tokenMinTtl) {
+      return nodeify(Promise.reject(new Error('Session near maximum lifespan: re-login required')), callback);
+    }
+  }
+
   const params = {
     grant_type: 'refresh_token',
     refresh_token: grant.refresh_token.token
