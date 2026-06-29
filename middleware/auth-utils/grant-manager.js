@@ -41,6 +41,7 @@ function GrantManager (config) {
   this.notBefore = 0;
   this.rotation = new Rotation(config);
   this.tokenMinTtl = config.tokenMinTtl;
+  this._pendingRefreshes = new Map();
 }
 
 /**
@@ -168,7 +169,21 @@ GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callba
   const handler = refreshHandler(this, grant);
   const options = postOptions(this);
 
-  return nodeify(fetch(this, handler, options, params), callback);
+  const refreshJti = grant.refresh_token.content && grant.refresh_token.content.jti;
+  if (refreshJti && this._pendingRefreshes.has(refreshJti)) {
+    return nodeify(this._pendingRefreshes.get(refreshJti), callback);
+  }
+
+  const refreshPromise = fetch(this, handler, options, params);
+  if (refreshJti) {
+    this._pendingRefreshes.set(refreshJti, refreshPromise);
+    refreshPromise.then(
+      () => this._pendingRefreshes.delete(refreshJti),
+      () => this._pendingRefreshes.delete(refreshJti)
+    );
+  }
+
+  return nodeify(refreshPromise, callback);
 };
 
 /**

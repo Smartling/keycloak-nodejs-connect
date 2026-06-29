@@ -183,3 +183,192 @@ test('grant without access token skips session-cap detection', t => {
     .then(() => { t.pass('resolved without Fix 2 rejection'); t.end(); })
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
+
+// ─── Fix 1: Refresh deduplication ────────────────────────────────────────────
+
+// Helper: grant needing refresh (capped token but with tokenMinTtl=0 so Fix 2 skips it),
+// with a jti so dedup applies.
+function makeRefreshNeededGrant (jti) {
+  const n = nowSec();
+  // expired token → ensureFreshness proceeds to fetch
+  const g = withRtExpired(makeGrant({ atExp: n - 10, atIat: n - 98, rtJti: jti }), false);
+  return g;
+}
+
+// Sets up a single nock interceptor and mocks createGrant.
+// Returns the manager so callers can also inspect _pendingRefreshes.
+function setupFix1Manager () {
+  const mgr = makeManager(0); // tokenMinTtl=0 so Fix 2 is never triggered
+  mgr.createGrant = () => Promise.resolve(makeRefreshNeededGrant('jti-new'));
+  return mgr;
+}
+
+test('two concurrent refreshes for the same token share one Keycloak request', t => {
+  nock.cleanAll();
+  const mgr = setupFix1Manager();
+  const grant = makeRefreshNeededGrant('jti-dedup-2');
+  mgr.createGrant = () => Promise.resolve(grant);
+
+  // Exactly one interceptor - if two fetches are made, the second fails
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
+
+  const p1 = mgr.ensureFreshness(grant);
+  const p2 = mgr.ensureFreshness(grant);
+
+  Promise.all([p1, p2])
+    .then(() => { t.pass('both concurrent calls resolved via single fetch'); t.end(); })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
+test('three concurrent refreshes for the same token share one Keycloak request', t => {
+  nock.cleanAll();
+  const mgr = setupFix1Manager();
+  const grant = makeRefreshNeededGrant('jti-dedup-3');
+  mgr.createGrant = () => Promise.resolve(grant);
+
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
+
+  const p1 = mgr.ensureFreshness(grant);
+  const p2 = mgr.ensureFreshness(grant);
+  const p3 = mgr.ensureFreshness(grant);
+
+  Promise.all([p1, p2, p3])
+    .then(() => { t.pass('all three concurrent calls resolved via single fetch'); t.end(); })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
+test('concurrent refreshes all receive the same error when Keycloak rejects', t => {
+  nock.cleanAll();
+  const mgr = setupFix1Manager();
+  const grant = makeRefreshNeededGrant('jti-dedup-err');
+  mgr.createGrant = () => Promise.resolve(grant);
+
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(401, 'Unauthorized');
+
+  const p1 = mgr.ensureFreshness(grant);
+  const p2 = mgr.ensureFreshness(grant);
+
+  Promise.all([
+    p1.catch(e => e),
+    p2.catch(e => e)
+  ]).then(([err1, err2]) => {
+    t.ok(err1 instanceof Error, 'p1 rejected with an Error');
+    t.ok(err2 instanceof Error, 'p2 rejected with an Error');
+    t.equal(err1, err2, 'both callers received the identical error object (same promise)');
+    t.end();
+  });
+});
+
+test('after successful refresh the deduplication map is cleared for future requests', t => {
+  nock.cleanAll();
+  const mgr = setupFix1Manager();
+  const grant = makeRefreshNeededGrant('jti-dedup-reuse');
+  mgr.createGrant = () => Promise.resolve(grant);
+
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
+
+  mgr.ensureFreshness(grant)
+    .then(() => {
+      t.equal(mgr._pendingRefreshes.size, 0, 'map is empty after first refresh settled');
+
+      // Second call: needs a fresh interceptor since map was cleaned
+      nock(KC_HOST).post(KC_TOKEN_PATH).once()
+        .reply(200, JSON.stringify({ access_token: 'new2', refresh_token: 'new-rt2' }));
+
+      return mgr.ensureFreshness(grant);
+    })
+    .then(() => { t.pass('second call after success issued a fresh fetch'); t.end(); })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
+test('after failed refresh the deduplication map is cleared for future requests', t => {
+  nock.cleanAll();
+  const mgr = setupFix1Manager();
+  const grant = makeRefreshNeededGrant('jti-dedup-fail-retry');
+  mgr.createGrant = () => Promise.resolve(grant);
+
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(401, 'Unauthorized');
+
+  mgr.ensureFreshness(grant)
+    .catch(() => {
+      t.equal(mgr._pendingRefreshes.size, 0, 'map is empty after failed refresh settled');
+
+      nock(KC_HOST).post(KC_TOKEN_PATH).once()
+        .reply(200, JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
+
+      return mgr.ensureFreshness(grant);
+    })
+    .then(() => { t.pass('second call after failure issued a fresh fetch'); t.end(); })
+    .catch(err => { t.fail('unexpected second failure: ' + err.message); t.end(); });
+});
+
+test('concurrent refreshes for different tokens each issue separate Keycloak requests', t => {
+  nock.cleanAll();
+  const mgr = setupFix1Manager();
+  const grantA = makeRefreshNeededGrant('jti-A');
+  const grantB = makeRefreshNeededGrant('jti-B');
+  mgr.createGrant = () => Promise.resolve(grantA);
+
+  // Two interceptors needed - one per distinct jti
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new-A', refresh_token: 'new-rt-A' }));
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new-B', refresh_token: 'new-rt-B' }));
+
+  const p1 = mgr.ensureFreshness(grantA);
+  const p2 = mgr.ensureFreshness(grantB);
+
+  Promise.all([p1, p2])
+    .then(() => { t.pass('both calls with different jtis completed independently'); t.end(); })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
+test('refresh tokens without jti claim bypass deduplication', t => {
+  nock.cleanAll();
+  const mgr = setupFix1Manager();
+  // rtJti: null → no jti in refresh token content → dedup skipped
+  const grant = withRtExpired(makeGrant({ atExp: nowSec() - 10, atIat: nowSec() - 98, rtJti: null }), false);
+  mgr.createGrant = () => Promise.resolve(grant);
+
+  // Two interceptors needed - no dedup means two fetches
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new1', refresh_token: 'new-rt1' }));
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new2', refresh_token: 'new-rt2' }));
+
+  const p1 = mgr.ensureFreshness(grant);
+  const p2 = mgr.ensureFreshness(grant);
+
+  Promise.all([p1, p2])
+    .then(() => { t.pass('both calls without jti completed with separate fetches'); t.end(); })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
+test('deduplication map is empty after all concurrent refreshes settle', t => {
+  nock.cleanAll();
+  const mgr = setupFix1Manager();
+  const grant = makeRefreshNeededGrant('jti-map-check');
+  mgr.createGrant = () => Promise.resolve(grant);
+
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
+
+  const p1 = mgr.ensureFreshness(grant);
+  const p2 = mgr.ensureFreshness(grant);
+  const p3 = mgr.ensureFreshness(grant);
+
+  t.equal(mgr._pendingRefreshes.size, 1, 'map has one entry while request is in-flight');
+
+  Promise.all([p1, p2, p3])
+    .then(() => {
+      t.equal(mgr._pendingRefreshes.size, 0, 'map is empty after all calls settle');
+      t.end();
+    })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
