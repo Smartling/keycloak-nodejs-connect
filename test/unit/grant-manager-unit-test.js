@@ -3,18 +3,7 @@
 const test = require('tape');
 const GrantManager = require('../../middleware/auth-utils/grant-manager');
 
-// nock 9.0.2 has compatibility issues with Node.js 22
-// Use a mock instead
-const nock = function (host) {
-  return {
-    post: (path) => ({
-      once: () => ({
-        reply: (status, body) => {}
-      })
-    })
-  };
-};
-nock.cleanAll = () => {};
+const nock = require('nock');
 
 const KC_HOST = 'http://localhost:8080';
 const KC_TOKEN_PATH = '/auth/realms/test/protocol/openid-connect/token';
@@ -73,44 +62,11 @@ function setupPassThroughRefresh (mgr, grant) {
   nock(KC_HOST)
     .post(KC_TOKEN_PATH)
     .once()
-    .reply(200, { access_token: 'new', refresh_token: 'new-rt' });
-
-  // Mock createGrant to avoid JWT validation issues
+    .reply(200, JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
   mgr.createGrant = () => Promise.resolve(grant);
-
-  // Also intercept the actual HTTP request to return a mock response
-  const http = require('http');
-  const https = require('https');
-  const originalHttpRequest = http.request;
-  const originalHttpsRequest = https.request;
-
-  const mockRequest = (options, callback) => {
-    const response = {
-      statusCode: 200,
-      headers: {},
-      on: function (event, listener) {
-        if (event === 'data') {
-          // Return a JSON response that createGrant can handle
-          listener(JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
-        } else if (event === 'end') {
-          listener();
-        }
-        return this;
-      }
-    };
-    callback(response);
-    return {
-      write: () => {},
-      end: () => {},
-      on: () => ({})
-    };
-  };
-
-  http.request = mockRequest;
-  https.request = mockRequest;
 }
 
-test('Fix2: capped token (exp-iat=88, tokenMinTtl=90) rejects with session-near-max error', t => {
+test('session-capped token (exp-iat=88, min-ttl=90) triggers re-login rejection', t => {
   const mgr = makeManager(90);
   const n = nowSec();
   // exp - iat = (n+86) - (n-2) = 88  <  tokenMinTtl=90  →  should reject
@@ -123,7 +79,7 @@ test('Fix2: capped token (exp-iat=88, tokenMinTtl=90) rejects with session-near-
     });
 });
 
-test('Fix2: exp-iat=89 (one second inside threshold) rejects', t => {
+test('session-capped token one second inside min-ttl threshold triggers re-login rejection', t => {
   const mgr = makeManager(90);
   const n = nowSec();
   // exp - iat = (n+80) - (n-9) = 89  <  90
@@ -136,7 +92,7 @@ test('Fix2: exp-iat=89 (one second inside threshold) rejects', t => {
     });
 });
 
-test('Fix2: exp-iat=1 (extreme cap) rejects', t => {
+test('session-capped token with 1s issued lifetime triggers re-login rejection', t => {
   const mgr = makeManager(90);
   const n = nowSec();
   // exp - iat = (n+50) - (n+49) = 1  <  90
@@ -149,7 +105,7 @@ test('Fix2: exp-iat=1 (extreme cap) rejects', t => {
     });
 });
 
-test('Fix2: callback style - capped token calls callback with error', t => {
+test('session-capped token via callback style delivers error to callback', t => {
   const mgr = makeManager(90);
   const n = nowSec();
   const grant = withRtExpired(makeGrant({ atExp: n + 86, atIat: n - 2, rtJti: 'jti-4' }), false);
@@ -160,7 +116,7 @@ test('Fix2: callback style - capped token calls callback with error', t => {
   });
 });
 
-test('Fix2: exp-iat=90 equals tokenMinTtl (boundary exclusive) - does not reject via Fix 2', t => {
+test('token with issued lifetime equal to min-ttl boundary is not treated as capped', t => {
   const mgr = makeManager(90);
   const n = nowSec();
   // exp - iat = (n+80) - (n-10) = 90 = tokenMinTtl  →  NOT less than, should not reject via Fix 2
@@ -171,7 +127,7 @@ test('Fix2: exp-iat=90 equals tokenMinTtl (boundary exclusive) - does not reject
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
-test('Fix2: exp-iat=480 (normal token, tokenMinTtl=90) - does not reject via Fix 2', t => {
+test('token with normal 480s issued lifetime proceeds to normal refresh', t => {
   const mgr = makeManager(90);
   const n = nowSec();
   // exp - iat = (n+470) - (n-10) = 480  >=  90
@@ -182,7 +138,7 @@ test('Fix2: exp-iat=480 (normal token, tokenMinTtl=90) - does not reject via Fix
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
-test('Fix2: already-expired token with capped lifetime (isExpired=true) does not trigger Fix 2', t => {
+test('expired token with short issued lifetime falls through to normal refresh path', t => {
   const mgr = makeManager(90);
   const n = nowSec();
   // isExpired()=true because exp is in the past; Fix 2 guard checks !isExpired() first
@@ -194,19 +150,18 @@ test('Fix2: already-expired token with capped lifetime (isExpired=true) does not
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
-test('Fix2: tokenMinTtl=0 - Fix 2 check skipped entirely', t => {
+test('min-ttl of zero disables session-cap detection', t => {
   // With tokenMinTtl=0: willTokenExpireBeforeTimeToLive(0) === isExpired().
   // A non-expired token returns fresh immediately via the first guard.
   const mgr = makeManager(0);
   const n = nowSec();
   const grant = withRtExpired(makeGrant({ atExp: n + 86, atIat: n - 2, rtJti: 'jti-8' }), false);
-  setupPassThroughRefresh(mgr, grant);
   mgr.ensureFreshness(grant)
     .then(() => { t.pass('returned early as fresh (Fix 2 never reached)'); t.end(); })
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
-test('Fix2: tokenMinTtl=undefined - Fix 2 check skipped entirely', t => {
+test('undefined min-ttl disables session-cap detection', t => {
   const mgr = makeManager(undefined);
   const n = nowSec();
   const grant = withRtExpired(makeGrant({ atExp: n + 86, atIat: n - 2, rtJti: 'jti-9' }), false);
@@ -215,7 +170,7 @@ test('Fix2: tokenMinTtl=undefined - Fix 2 check skipped entirely', t => {
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
-test('Fix2: no access_token on grant - Fix 2 check skipped', t => {
+test('grant without access token skips session-cap detection', t => {
   const mgr = makeManager(90);
   const grant = {
     access_token: undefined,
