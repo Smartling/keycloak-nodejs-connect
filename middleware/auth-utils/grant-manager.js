@@ -23,6 +23,7 @@ const querystring = require('querystring');
 const Grant = require('./grant');
 const Token = require('./token');
 var Rotation = require('./rotation');
+const { SessionExpiredError } = require('./errors');
 
 /**
  * Construct a grant manager.
@@ -163,7 +164,7 @@ GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callba
     // login instead.
     const issuedLifetime = grant.access_token.content.exp - grant.access_token.content.iat;
     if (issuedLifetime < this.tokenMinTtl) {
-      return nodeify(Promise.reject(new Error('Session near maximum lifespan: re-login required')), callback);
+      return nodeify(Promise.reject(new SessionExpiredError(grant)), callback);
     }
   }
 

@@ -15,6 +15,9 @@
  */
 'use strict';
 
+const { SessionExpiredError } = require('./auth-utils/errors');
+const { logoutAndRedirect } = require('./logout');
+
 module.exports = function (keycloak) {
   return function grantAttacher (request, response, next) {
     keycloak.getGrant(request, response)
@@ -22,6 +25,16 @@ module.exports = function (keycloak) {
         request.kauth.grant = grant;
       })
         .then(next).catch(err => {
+        if (err instanceof SessionExpiredError) {
+          // Session has reached maximum lifespan. A simple re-login redirect would loop because
+          // Keycloak's SSO session is still alive. Perform a full RP-initiated logout first to
+          // clear the Keycloak session, then the subsequent login redirect will work correctly.
+          if (err.grant && err.grant.unstore) {
+            request.kauth.grant = err.grant;
+          }
+          return logoutAndRedirect(keycloak, request, response);
+        }
+
         // err can be undefined
           if (err) {
             console.error('Failed to get grant', err);
