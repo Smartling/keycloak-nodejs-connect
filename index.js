@@ -26,6 +26,7 @@ var Logout = require('./middleware/logout');
 var PostAuth = require('./middleware/post-auth');
 var GrantAttacher = require('./middleware/grant-attacher');
 var Protect = require('./middleware/protect');
+const { SessionExpiredError } = require('./middleware/auth-utils/errors');
 
 /**
  * Instantiate a Keycloak.
@@ -259,10 +260,12 @@ Keycloak.prototype.getGrant = function (request, response) {
       return grant;
     })
     .catch((e) => {
-      // Pass Error instances through unchanged so structured rejections (e.g. session-cap guard)
-      // reach the caller with their original message rather than being re-wrapped.
+      if (e instanceof SessionExpiredError && e.grant && self.stores.length >= 2) {
+        self.stores[1].wrap(e.grant);
+        return Promise.reject(e);
+      }
       if (e instanceof Error) return Promise.reject(e);
-      return Promise.reject(new Error('Could not store grant code error. ' + e));
+      return Promise.reject(new Error('Failed to process grant: ' + e));
     });
   }
 

@@ -15,26 +15,31 @@
  */
 'use strict';
 
+function performLogout (keycloak, request, response) {
+  let host = request.hostname;
+  let headerHost = request.headers.host.split(':');
+  let port = headerHost[1] || '';
+  let redirectUrl = request.query.redirectUrl || request.protocol + '://' + host + (port === '' ? '' : ':' + port) + '/';
+
+  const idTokenHint = request.kauth.grant && request.kauth.grant.id_token && request.kauth.grant.id_token.token;
+  let keycloakLogoutUrl = keycloak.logoutUrl(redirectUrl, idTokenHint);
+
+  if (request.kauth.grant) {
+    keycloak.deauthenticated(request);
+    request.kauth.grant.unstore(request, response);
+    delete request.kauth.grant;
+  }
+
+  response.redirect(keycloakLogoutUrl);
+}
+
 module.exports = function (keycloak, logoutUrl) {
   return function logout (request, response, next) {
     if (request.path !== logoutUrl) {
       return next();
     }
-
-    let host = request.hostname;
-    let headerHost = request.headers.host.split(':');
-    let port = headerHost[1] || '';
-    let redirectUrl = request.query.redirectUrl || request.protocol + '://' + host + (port === '' ? '' : ':' + port) + '/';
-
-    const idTokenHint = request.kauth.grant && request.kauth.grant.id_token && request.kauth.grant.id_token.token;
-    let keycloakLogoutUrl = keycloak.logoutUrl(redirectUrl, idTokenHint);
-
-    if (request.kauth.grant) {
-      keycloak.deauthenticated(request);
-      request.kauth.grant.unstore(request, response);
-      delete request.kauth.grant;
-    }
-
-    response.redirect(keycloakLogoutUrl);
+    performLogout(keycloak, request, response);
   };
 };
+
+module.exports.performLogout = performLogout;

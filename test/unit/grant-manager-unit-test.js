@@ -2,6 +2,7 @@
 
 const test = require('tape');
 const GrantManager = require('../../middleware/auth-utils/grant-manager');
+const { SessionExpiredError } = require('../../middleware/auth-utils/errors');
 
 const nock = require('nock');
 
@@ -73,6 +74,7 @@ test('session-capped token (exp-iat=88, min-ttl=90) triggers re-login rejection'
   mgr.ensureFreshness(grant)
     .then(() => { t.fail('should have rejected'); t.end(); })
     .catch(err => {
+      t.ok(err instanceof SessionExpiredError, 'error is a SessionExpiredError');
       t.equal(err.message, 'Session near maximum lifespan: re-login required');
       t.end();
     });
@@ -86,6 +88,7 @@ test('session-capped token one second inside min-ttl threshold triggers re-login
   mgr.ensureFreshness(grant)
     .then(() => { t.fail('should have rejected'); t.end(); })
     .catch(err => {
+      t.ok(err instanceof SessionExpiredError, 'error is a SessionExpiredError');
       t.equal(err.message, 'Session near maximum lifespan: re-login required');
       t.end();
     });
@@ -99,6 +102,7 @@ test('session-capped token with 1s issued lifetime triggers re-login rejection',
   mgr.ensureFreshness(grant)
     .then(() => { t.fail('should have rejected'); t.end(); })
     .catch(err => {
+      t.ok(err instanceof SessionExpiredError, 'error is a SessionExpiredError');
       t.equal(err.message, 'Session near maximum lifespan: re-login required');
       t.end();
     });
@@ -110,9 +114,39 @@ test('session-capped token via callback style delivers error to callback', t => 
   const grant = withRtExpired(makeGrant({ atExp: n + 86, atIat: n - 2, rtJti: 'jti-4' }), false);
   mgr.ensureFreshness(grant, (err) => {
     t.ok(err, 'error passed to callback');
+    t.ok(err instanceof SessionExpiredError, 'error is a SessionExpiredError');
     t.equal(err.message, 'Session near maximum lifespan: re-login required');
     t.end();
   });
+});
+
+test('session-capped token carries grant and idTokenHint from grant id_token', t => {
+  const mgr = makeManager(90);
+  const n = nowSec();
+  const grant = withRtExpired(makeGrant({ atExp: n + 86, atIat: n - 2, rtJti: 'jti-hint' }), false);
+  grant.id_token = { token: 'id.token.value' };
+  mgr.ensureFreshness(grant)
+    .then(() => { t.fail('should have rejected'); t.end(); })
+    .catch(err => {
+      t.ok(err instanceof SessionExpiredError, 'error is a SessionExpiredError');
+      t.equal(err.grant, grant, 'error carries the grant object');
+      t.equal(err.idTokenHint, 'id.token.value', 'idTokenHint is derived from grant.id_token.token');
+      t.end();
+    });
+});
+
+test('session-capped token has undefined idTokenHint when grant has no id_token', t => {
+  const mgr = makeManager(90);
+  const n = nowSec();
+  const grant = withRtExpired(makeGrant({ atExp: n + 86, atIat: n - 2, rtJti: 'jti-nohint' }), false);
+  mgr.ensureFreshness(grant)
+    .then(() => { t.fail('should have rejected'); t.end(); })
+    .catch(err => {
+      t.ok(err instanceof SessionExpiredError, 'error is a SessionExpiredError');
+      t.equal(err.grant, grant, 'error carries the grant object');
+      t.equal(err.idTokenHint, undefined, 'idTokenHint is undefined when no id_token present');
+      t.end();
+    });
 });
 
 test('token with issued lifetime equal to min-ttl boundary is not treated as capped', t => {
@@ -421,7 +455,7 @@ test('session-cap guard fires inside createGrant when KC returns a capped token,
 
   Promise.all([p1.catch(e => e), p2.catch(e => e), p3.catch(e => e)])
     .then(([e1, e2, e3]) => {
-      t.ok(e1 instanceof Error, 'all callers rejected with Error');
+      t.ok(e1 instanceof SessionExpiredError, 'all callers rejected with SessionExpiredError');
       t.equal(e1.message, 'Session near maximum lifespan: re-login required',
         'session-cap error message propagates through refreshPromise to all callers');
       t.equal(e1, e2, 'p2 shares same rejection object as p1 (dedup)');
