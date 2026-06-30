@@ -16,7 +16,7 @@
 'use strict';
 
 const { SessionExpiredError } = require('./auth-utils/errors');
-const { performLogout } = require('./logout');
+const { logoutAndRedirect } = require('./logout');
 
 module.exports = function (keycloak) {
   return function grantAttacher (request, response, next) {
@@ -32,7 +32,7 @@ module.exports = function (keycloak) {
           if (err.grant && err.grant.unstore) {
             request.kauth.grant = err.grant;
           }
-          return performLogout(keycloak, request, response);
+          return logoutAndRedirect(keycloak, request, response);
         }
 
         // err can be undefined

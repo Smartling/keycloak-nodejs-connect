@@ -15,7 +15,7 @@
  */
 'use strict';
 
-function performLogout (keycloak, request, response) {
+function logoutAndRedirect (keycloak, request, response) {
   let host = request.hostname;
   let headerHost = request.headers.host.split(':');
   let port = headerHost[1] || '';
@@ -38,8 +38,8 @@ module.exports = function (keycloak, logoutUrl) {
     if (request.path !== logoutUrl) {
       return next();
     }
-    performLogout(keycloak, request, response);
+    logoutAndRedirect(keycloak, request, response);
   };
 };
 
-module.exports.performLogout = performLogout;
+module.exports.logoutAndRedirect = logoutAndRedirect;
