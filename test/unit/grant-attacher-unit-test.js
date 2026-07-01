@@ -19,7 +19,7 @@ const test = require('tape');
 const grantAttacherMiddleware = require('../../middleware/grant-attacher');
 const { SessionExpiredError } = require('../../middleware/auth-utils/errors');
 
-function buildRequest ({ xhr = false, acceptsHtml = true } = {}) {
+function buildRequest ({ xhr = false, acceptsHtml = true, originalUrl } = {}) {
   return {
     hostname: 'app.example',
     protocol: 'https',
@@ -27,6 +27,7 @@ function buildRequest ({ xhr = false, acceptsHtml = true } = {}) {
     query: {},
     kauth: {},
     xhr,
+    originalUrl,
     accepts: (type) => acceptsHtml && type === 'text/html'
   };
 }
@@ -173,6 +174,24 @@ test('grant-attacher: SessionExpiredError redirect URL uses request protocol and
   setTimeout(() => {
     t.ok(res._redirects[0].includes(encodeURIComponent('https://myapp.example:3000/')),
       'redirect URL includes correct origin with port');
+    t.end();
+  }, 10);
+});
+
+test('grant-attacher: SessionExpiredError redirect preserves the original deep-linked URL', t => {
+  const err = buildSessionExpiredError({ idTokenHint: undefined });
+  const { keycloak } = buildKeycloakStub({ getGrantResult: Promise.reject(err) });
+  const middleware = grantAttacherMiddleware(keycloak);
+  const req = buildRequest({ originalUrl: '/app/84c012a33?locale=fr&start=0' });
+  const res = buildResponse();
+
+  middleware(req, res, () => { t.fail('next() should not be called'); });
+
+  setTimeout(() => {
+    t.ok(
+      res._redirects[0].includes(encodeURIComponent('https://app.example/app/84c012a33?locale=fr&start=0')),
+      'post_logout_redirect_uri should be the originally-requested deep link, not the site root'
+    );
     t.end();
   }, 10);
 });
