@@ -29,13 +29,19 @@ module.exports = function (keycloak) {
           // Session has reached maximum lifespan. A simple re-login redirect would loop because
           // Keycloak's SSO session is still alive. Perform a full RP-initiated logout first to
           // clear the Keycloak session, then the subsequent login redirect will work correctly.
-          const isNavigational = !request.xhr && !!request.accepts('text/html');
+          // Only redirect browsers (navigational requests) to the logout page.
+          // XHR / fetch / API callers should not receive a redirect response.
+          const isNavigational = !request.xhr &&
+            typeof request.accepts === 'function' &&
+            !!request.accepts('text/html');
           if (isNavigational) {
             if (err.grant && err.grant.unstore) {
               request.kauth.grant = err.grant;
             }
             return logoutAndRedirect(keycloak, request, response);
           }
+          next();
+          return;
         }
 
         // err can be undefined
