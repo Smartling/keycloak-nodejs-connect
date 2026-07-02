@@ -46,8 +46,6 @@ module.exports = function (keycloak) {
               .then(next);
             return;
           }
-          next();
-          return;
         }
         next();
       });
