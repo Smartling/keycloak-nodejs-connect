@@ -476,4 +476,17 @@ const fetch = (manager, handler, options, params) => {
   });
 };
 
+GrantManager.prototype.logout = function logout (grant) {
+  const params = {
+    client_id: this.clientId,
+    refresh_token: grant.refresh_token && grant.refresh_token.token
+  };
+  return fetch(
+    this,
+    (resolve) => resolve(),
+    postOptions(this, '/protocol/openid-connect/logout'),
+    params
+  );
+};
+
 module.exports = GrantManager;

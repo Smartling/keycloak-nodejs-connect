@@ -16,7 +16,6 @@
 'use strict';
 
 const { SessionExpiredError } = require('./auth-utils/errors');
-const { logoutAndRedirect } = require('./logout');
 
 // Reconstruct the URL the browser was navigating to when the session expired,
 // so that after RP-initiated logout the user lands back where they started
@@ -40,19 +39,20 @@ module.exports = function (keycloak) {
       })
         .then(next).catch(err => {
         if (err instanceof SessionExpiredError) {
-          // Session has reached maximum lifespan. A simple re-login redirect would loop because
-          // Keycloak's SSO session is still alive. Perform a full RP-initiated logout first to
-          // clear the Keycloak session, then the subsequent login redirect will work correctly.
-          // Only redirect browsers (navigational requests) to the logout page.
-          // XHR / fetch / API callers should not receive a redirect response.
-          const isNavigational = !request.xhr &&
-            typeof request.accepts === 'function' &&
-            !!request.accepts('text/html');
-          if (isNavigational) {
-            if (err.grant && err.grant.unstore) {
-              request.kauth.grant = err.grant;
-            }
-            return logoutAndRedirect(keycloak, request, response, currentRequestUrl(request));
+          // Session has reached its maximum lifespan. Back-channel logout to invalidate the
+          // Keycloak session, then clear local state and let downstream middleware (protect.js)
+          // handle the re-authentication challenge.
+          const grant = err.grant;
+          if (grant) {
+            keycloak.grantManager.logout(grant)
+              .then(() => {
+                // after successful logout clear the local state
+                if (grant.unstore) grant.unstore(request, response);
+                keycloak.deauthenticated(request);
+              })
+              .catch(() => {})
+              .then(next);
+            return;
           }
           next();
           return;
