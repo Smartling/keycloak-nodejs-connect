@@ -17,14 +17,31 @@
 
 const UUID = require('./../uuid');
 
+// Characters browsers commonly leave unencoded in a query string (per the WHATWG URL
+// spec) but that Keycloak's server-side URI builder percent-encodes when it reconstructs
+// the redirect_uri to build the post-login Location header. If we send them unencoded on
+// the initial /auth request, Keycloak's saved copy no longer matches the encoded form it
+// hands back later, and the code-to-token exchange fails with invalid_redirect_uri. Encode
+// them here so both copies are identical from the start. See AUT-1461.
+const KEYCLOAK_QUERY_UNSAFE_CHARS = /[[\]{}]/g;
+const KEYCLOAK_QUERY_UNSAFE_CHAR_ENCODINGS = { '[': '%5B', ']': '%5D', '{': '%7B', '}': '%7D' };
+
+function encodeUnsafeQueryChars (queryString) {
+  return queryString.replace(KEYCLOAK_QUERY_UNSAFE_CHARS, (char) => KEYCLOAK_QUERY_UNSAFE_CHAR_ENCODINGS[char]);
+}
+
 function forceLogin (keycloak, request, response) {
   let host = request.hostname;
   let headerHost = request.headers.host.split(':');
   let port = headerHost[1] || '';
   let protocol = request.protocol;
-  let hasQuery = ~(request.originalUrl || request.url).indexOf('?');
+  let originalUrl = request.originalUrl || request.url;
+  let queryIndex = originalUrl.indexOf('?');
+  let pathname = queryIndex === -1 ? originalUrl : originalUrl.slice(0, queryIndex);
+  let queryString = queryIndex === -1 ? '' : encodeUnsafeQueryChars(originalUrl.slice(queryIndex + 1));
+  let hasQuery = queryIndex !== -1;
 
-  let redirectUrl = protocol + '://' + host + (port === '' ? '' : ':' + port) + (request.originalUrl || request.url) + (hasQuery ? '&' : '?') + 'auth_callback=1';
+  let redirectUrl = protocol + '://' + host + (port === '' ? '' : ':' + port) + pathname + (hasQuery ? '?' + queryString + '&' : '?') + 'auth_callback=1';
 
   if (request.session) {
     request.session.auth_redirect_uri = redirectUrl;
