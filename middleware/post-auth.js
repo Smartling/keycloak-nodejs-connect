@@ -19,7 +19,9 @@ const URL = require('url');
 
 // Query parameters that Keycloak appends to the callback URL. They are not part
 // of the redirect_uri that was sent on the authorization request, so they must
-// be stripped when reconstructing it for the code-to-token exchange.
+// be stripped when reconstructing it for the code-to-token exchange. Also used
+// by `forceLogin` in protect.js to strip stale copies of these params from the
+// current URL before it's captured as the redirect_uri for a fresh login.
 const KEYCLOAK_CALLBACK_PARAMS = ['code', 'state', 'session_state', 'iss'];
 
 // Reconstruct the redirect_uri from the incoming callback URL rather than
@@ -91,3 +93,5 @@ module.exports = function (keycloak) {
       });
   };
 };
+
+module.exports.KEYCLOAK_CALLBACK_PARAMS = KEYCLOAK_CALLBACK_PARAMS;

@@ -16,6 +16,7 @@
 'use strict';
 
 const UUID = require('./../uuid');
+const { KEYCLOAK_CALLBACK_PARAMS } = require('./post-auth');
 
 // Characters browsers commonly leave unencoded in a query string (per the WHATWG URL
 // spec) but that Keycloak's server-side URI builder percent-encodes when it reconstructs
@@ -30,6 +31,19 @@ function encodeUnsafeQueryChars (queryString) {
   return queryString.replace(KEYCLOAK_QUERY_UNSAFE_CHARS, (char) => KEYCLOAK_QUERY_UNSAFE_CHAR_ENCODINGS[char]);
 }
 
+// Strip any Keycloak-reserved params already present on the current URL (e.g. a stale
+// session_state left over from a previous login) before it's captured as the redirect_uri
+// for a fresh login. Otherwise they'd be sent to Keycloak as part of redirect_uri, then
+// stripped again by reconstructRedirectUri during the token exchange, producing a mismatched
+// redirect_uri and an invalid_redirect_uri error. See AUT-1461.
+function stripKeycloakCallbackParams (queryString) {
+  return queryString
+    .split('&')
+    .filter(segment => segment.length > 0)
+    .filter(segment => KEYCLOAK_CALLBACK_PARAMS.indexOf(segment.split('=')[0]) === -1)
+    .join('&');
+}
+
 function forceLogin (keycloak, request, response) {
   let host = request.hostname;
   let headerHost = request.headers.host.split(':');
@@ -38,8 +52,8 @@ function forceLogin (keycloak, request, response) {
   let originalUrl = request.originalUrl || request.url;
   let queryIndex = originalUrl.indexOf('?');
   let pathname = queryIndex === -1 ? originalUrl : originalUrl.slice(0, queryIndex);
-  let queryString = queryIndex === -1 ? '' : encodeUnsafeQueryChars(originalUrl.slice(queryIndex + 1));
-  let hasQuery = queryIndex !== -1;
+  let queryString = queryIndex === -1 ? '' : encodeUnsafeQueryChars(stripKeycloakCallbackParams(originalUrl.slice(queryIndex + 1)));
+  let hasQuery = queryString !== '';
 
   let portPart = port === '' ? '' : `:${port}`;
   let queryPrefix = hasQuery ? `${queryString}&` : '';
