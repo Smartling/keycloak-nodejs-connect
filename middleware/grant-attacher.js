@@ -30,9 +30,15 @@ module.exports = function (keycloak) {
           // handle the re-authentication challenge.
           const grant = err.grant;
           if (grant) {
-            keycloak.grantManager.logout(grant).catch(() => {});
-            if (grant.unstore) grant.unstore(request, response);
-            keycloak.deauthenticated(request);
+            keycloak.grantManager.logout(grant)
+              .then(() => {
+                // after successful logout clear the local state
+                if (grant.unstore) grant.unstore(request, response);
+                keycloak.deauthenticated(request);
+              })
+              .catch(() => {})
+              .then(next);
+            return;
           }
           next();
           return;

@@ -150,9 +150,9 @@ test('grant-attacher: SessionExpiredError with grant missing unstore skips unsto
   });
 });
 
-test('grant-attacher: back-channel logout failure does not prevent next() from being called', t => {
+test('grant-attacher: back-channel logout failure calls next() but skips local session cleanup', t => {
   const err = buildSessionExpiredError();
-  const { keycloak } = buildKeycloakStub({
+  const { keycloak, deauthCalls } = buildKeycloakStub({
     getGrantResult: Promise.reject(err),
     logoutResult: Promise.reject(new Error('KC unreachable'))
   });
@@ -162,6 +162,8 @@ test('grant-attacher: back-channel logout failure does not prevent next() from b
 
   middleware(req, res, () => {
     t.pass('next() called even when back-channel logout fails');
+    t.equal(err._unstoreCalls.length, 0, 'unstore not called when logout fails');
+    t.equal(deauthCalls.length, 0, 'deauthenticated not called when logout fails');
     t.end();
   });
 });
