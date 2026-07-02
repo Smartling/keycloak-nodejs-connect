@@ -40,25 +40,28 @@ function buildResponse () {
   };
 }
 
-function buildKeycloakStub ({ getGrantResult } = {}) {
+function buildKeycloakStub ({ getGrantResult, logoutResult } = {}) {
   const deauthCalls = [];
+  const logoutCalls = [];
   const keycloak = {
     getGrant: () => getGrantResult,
-    logoutUrl: (redirectUrl, idTokenHint) => {
-      return 'https://keycloak.example/logout?redirect=' + encodeURIComponent(redirectUrl) +
-        (idTokenHint ? '&id_token_hint=' + encodeURIComponent(idTokenHint) : '');
-    },
-    deauthenticated: (req) => { deauthCalls.push(req); }
+    deauthenticated: (req) => { deauthCalls.push(req); },
+    grantManager: {
+      logout: (grant) => {
+        logoutCalls.push(grant);
+        return logoutResult !== undefined ? logoutResult : Promise.resolve();
+      }
+    }
   };
-  return { keycloak, deauthCalls };
+  return { keycloak, deauthCalls, logoutCalls };
 }
 
 // Builds a SessionExpiredError whose .grant has already been wrapped by getGrant
 // (i.e. has a working unstore method), matching what index.js produces.
-function buildSessionExpiredError ({ idTokenHint } = {}) {
+function buildSessionExpiredError () {
   const unstoreCalls = [];
   const grant = {
-    id_token: idTokenHint ? { token: idTokenHint } : undefined,
+    refresh_token: { token: 'fake-refresh-token' },
     unstore: (req, res) => { unstoreCalls.push({ req, res }); }
   };
   const err = new SessionExpiredError(grant);
@@ -105,77 +108,81 @@ test('grant-attacher: calls next() silently when getGrant rejects with no error'
   });
 });
 
-test('grant-attacher: SessionExpiredError triggers RP-initiated logout redirect', t => {
-  const err = buildSessionExpiredError({ idTokenHint: 'id.token.hint' });
-  const { keycloak, deauthCalls } = buildKeycloakStub({ getGrantResult: Promise.reject(err) });
+test('grant-attacher: SessionExpiredError triggers back-channel logout and calls next()', t => {
+  const err = buildSessionExpiredError();
+  const { keycloak, deauthCalls, logoutCalls } = buildKeycloakStub({ getGrantResult: Promise.reject(err) });
   const middleware = grantAttacherMiddleware(keycloak);
   const req = buildRequest();
   const res = buildResponse();
 
-  middleware(req, res, () => { t.fail('next() should not be called'); });
-
-  setTimeout(() => {
-    t.equal(res._redirects.length, 1, 'one redirect issued');
-    t.ok(res._redirects[0].includes('id_token_hint='), 'redirect URL includes id_token_hint');
-    t.equal(err._unstoreCalls.length, 1, 'grant.unstore was called to clear the session');
-    t.equal(deauthCalls.length, 1, 'keycloak.deauthenticated was called');
+  middleware(req, res, () => {
+    t.equal(logoutCalls.length, 1, 'grantManager.logout called with the expired grant');
+    t.equal(err._unstoreCalls.length, 1, 'grant.unstore called to clear local session');
+    t.equal(deauthCalls.length, 1, 'keycloak.deauthenticated called');
+    t.equal(res._redirects.length, 0, 'no redirect — downstream middleware handles re-auth');
     t.end();
-  }, 10);
+  });
 });
 
-test('grant-attacher: SessionExpiredError without idTokenHint still redirects to logout', t => {
-  const err = buildSessionExpiredError({ idTokenHint: undefined });
-  const { keycloak, deauthCalls } = buildKeycloakStub({ getGrantResult: Promise.reject(err) });
+test('grant-attacher: SessionExpiredError without grant just calls next()', t => {
+  const err = new SessionExpiredError(undefined);
+  const { keycloak, deauthCalls, logoutCalls } = buildKeycloakStub({ getGrantResult: Promise.reject(err) });
   const middleware = grantAttacherMiddleware(keycloak);
   const req = buildRequest();
   const res = buildResponse();
 
-  middleware(req, res, () => { t.fail('next() should not be called'); });
-
-  setTimeout(() => {
-    t.equal(res._redirects.length, 1, 'one redirect issued');
-    t.notOk(res._redirects[0].includes('id_token_hint='), 'no id_token_hint when hint is absent');
-    t.equal(err._unstoreCalls.length, 1, 'grant.unstore was called');
-    t.equal(deauthCalls.length, 1, 'keycloak.deauthenticated was called');
+  middleware(req, res, () => {
+    t.equal(logoutCalls.length, 0, 'no logout call when grant is absent');
+    t.equal(deauthCalls.length, 0, 'no deauthenticated call when grant is absent');
     t.end();
-  }, 10);
+  });
 });
 
-test('grant-attacher: SessionExpiredError with unwrapped grant skips unstore but still redirects', t => {
-  // Simulates the bearer-only edge case: getGrant skips wrap when stores.length < 2,
-  // so err.grant exists but has no unstore method.
-  const err = new SessionExpiredError({ id_token: undefined }); // grant without unstore — not wrapped
-  const { keycloak, deauthCalls } = buildKeycloakStub({ getGrantResult: Promise.reject(err) });
+test('grant-attacher: SessionExpiredError with grant missing unstore skips unstore but still logs out', t => {
+  const grant = { refresh_token: { token: 'fake-refresh-token' } }; // no unstore
+  const err = new SessionExpiredError(grant);
+  const { keycloak, deauthCalls, logoutCalls } = buildKeycloakStub({ getGrantResult: Promise.reject(err) });
   const middleware = grantAttacherMiddleware(keycloak);
   const req = buildRequest();
   const res = buildResponse();
 
-  middleware(req, res, () => { t.fail('next() should not be called'); });
-
-  setTimeout(() => {
-    t.equal(res._redirects.length, 1, 'redirect issued even without wrapped grant');
-    t.equal(deauthCalls.length, 0, 'deauthenticated not called when grant has no unstore');
+  middleware(req, res, () => {
+    t.equal(logoutCalls.length, 1, 'back-channel logout still called');
+    t.equal(deauthCalls.length, 1, 'deauthenticated still called');
     t.end();
-  }, 10);
+  });
 });
 
-test('grant-attacher: SessionExpiredError redirect URL uses request protocol and hostname', t => {
-  const err = buildSessionExpiredError({ idTokenHint: undefined });
-  const { keycloak } = buildKeycloakStub({ getGrantResult: Promise.reject(err) });
+test('grant-attacher: back-channel logout failure calls next() but skips local session cleanup', t => {
+  const err = buildSessionExpiredError();
+  const { keycloak, deauthCalls } = buildKeycloakStub({
+    getGrantResult: Promise.reject(err),
+    logoutResult: Promise.reject(new Error('KC unreachable'))
+  });
   const middleware = grantAttacherMiddleware(keycloak);
   const req = buildRequest();
-  req.protocol = 'https';
-  req.hostname = 'myapp.example';
-  req.headers = { host: 'myapp.example:3000' };
   const res = buildResponse();
 
-  middleware(req, res, () => { t.fail('next() should not be called'); });
-
-  setTimeout(() => {
-    t.ok(res._redirects[0].includes(encodeURIComponent('https://myapp.example:3000/')),
-      'redirect URL includes correct origin with port');
+  middleware(req, res, () => {
+    t.pass('next() called even when back-channel logout fails');
+    t.equal(err._unstoreCalls.length, 0, 'unstore not called when logout fails');
+    t.equal(deauthCalls.length, 0, 'deauthenticated not called when logout fails');
     t.end();
-  }, 10);
+  });
+});
+
+test('grant-attacher: SessionExpiredError on XHR request also triggers back-channel logout', t => {
+  const err = buildSessionExpiredError();
+  const { keycloak, logoutCalls } = buildKeycloakStub({ getGrantResult: Promise.reject(err) });
+  const middleware = grantAttacherMiddleware(keycloak);
+  const req = Object.assign(buildRequest(), { xhr: true });
+  const res = buildResponse();
+
+  middleware(req, res, () => {
+    t.equal(logoutCalls.length, 1, 'back-channel logout called for XHR requests too');
+    t.equal(res._redirects.length, 0, 'no redirect for XHR request');
+    t.end();
+  });
 });
 
 test('grant-attacher: SessionExpiredError redirect preserves the original deep-linked URL', t => {

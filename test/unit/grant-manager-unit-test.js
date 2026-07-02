@@ -8,6 +8,7 @@ const nock = require('nock');
 
 const KC_HOST = 'http://localhost:8080';
 const KC_TOKEN_PATH = '/auth/realms/test/protocol/openid-connect/token';
+const KC_LOGOUT_PATH = '/auth/realms/test/protocol/openid-connect/logout';
 
 function makeManager (tokenMinTtl) {
   return new GrantManager({
@@ -112,6 +113,7 @@ test('session-capped token via callback style delivers error to callback', t => 
   const mgr = makeManager(90);
   const n = nowSec();
   const grant = withRtExpired(makeGrant({ atExp: n + 86, atIat: n - 2, rtJti: 'jti-4' }), false);
+  nock(KC_HOST).post(KC_LOGOUT_PATH).once().reply(204);
   mgr.ensureFreshness(grant, (err) => {
     t.ok(err, 'error passed to callback');
     t.ok(err instanceof SessionExpiredError, 'error is a SessionExpiredError');
@@ -462,6 +464,42 @@ test('session-cap guard fires inside createGrant when KC returns a capped token,
       t.equal(e1, e3, 'p3 shares same rejection object as p1 (dedup)');
       t.equal(mgr._pendingRefreshes.size, 0, 'map cleared after rejection');
       t.equal(nock.pendingMocks().length, 0, 'exactly one KC token call made');
+      t.end();
+    });
+});
+
+// ─── logout ─────────────────────────────────────────────────────────────────
+
+test('logout: POSTs refresh_token to KC logout endpoint and resolves', t => {
+  const mgr = makeManager();
+  nock.cleanAll();
+  nock(KC_HOST)
+    .post(KC_LOGOUT_PATH, (body) => body.refresh_token === 'fake-refresh-token')
+    .once()
+    .reply(204, '');
+
+  const grant = makeGrant({ atExp: nowSec() + 60, atIat: nowSec(), rtJti: 'jti-1' });
+  mgr.logout(grant)
+    .then(() => {
+      t.equal(nock.pendingMocks().length, 0, 'exactly one POST to KC logout endpoint');
+      t.end();
+    })
+    .catch(err => { t.fail('logout rejected: ' + err.message); t.end(); });
+});
+
+test('logout: rejects when KC returns an error status', t => {
+  const mgr = makeManager();
+  nock.cleanAll();
+  nock(KC_HOST)
+    .post(KC_LOGOUT_PATH)
+    .once()
+    .reply(400, 'Bad Request');
+
+  const grant = makeGrant({ atExp: nowSec() + 60, atIat: nowSec(), rtJti: 'jti-1' });
+  mgr.logout(grant)
+    .then(() => { t.fail('should have rejected'); t.end(); })
+    .catch(err => {
+      t.ok(err.message.includes('400'), 'error contains status code');
       t.end();
     });
 });
