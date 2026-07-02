@@ -133,6 +133,36 @@ test('post-auth: strips code, state, session_state and iss from the reconstructe
   t.end();
 });
 
+test('post-auth: strips session_state and iss, not just code/state/auth_callback, from the browser-facing redirect URL', async t => {
+  const { keycloak } = buildKeycloakStub();
+  const middleware = postAuthMiddleware(keycloak);
+  const req = buildCallbackRequest({
+    path: '/app/account-jobs/',
+    query: {
+      filter: 'CURRENT_WORK',
+      auth_callback: '1',
+      state: 's1',
+      code: 'c1',
+      session_state: 'ss1',
+      iss: 'https://kc.example'
+    }
+  });
+  const res = buildResponse();
+
+  middleware(req, res, () => t.fail('next() should not be called'));
+
+  // getGrantFromCode resolves asynchronously; flush microtasks before asserting the redirect.
+  await new Promise(resolve => setImmediate(resolve));
+
+  t.equal(res._redirects.length, 1, 'one redirect issued');
+  t.equal(
+    res._redirects[0],
+    '/app/account-jobs/?filter=CURRENT_WORK',
+    'session_state and iss are stripped from the URL shown to the browser, like code/state/auth_callback'
+  );
+  t.end();
+});
+
 test('post-auth: includes port from the host header in the reconstructed redirect_uri', t => {
   const { keycloak, calls } = buildKeycloakStub();
   const middleware = postAuthMiddleware(keycloak);
