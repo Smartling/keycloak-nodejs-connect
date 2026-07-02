@@ -297,7 +297,7 @@ Keycloak.prototype.unstoreGrant = function (sessionId) {
   this.stores[1].clear(sessionId);
 };
 
-Keycloak.prototype.getGrantFromCode = function (code, request, response) {
+Keycloak.prototype.getGrantFromCode = function (code, request, response, redirectUri) {
   if (this.stores.length < 2) {
     // bearer-only, cannot do this;
     throw new Error('Cannot exchange code for grant in bearer-only mode');
@@ -306,7 +306,7 @@ Keycloak.prototype.getGrantFromCode = function (code, request, response) {
   var sessionId = request.session.id;
 
   var self = this;
-  return this.grantManager.obtainFromCode(request, code, sessionId)
+  return this.grantManager.obtainFromCode(request, code, sessionId, undefined, redirectUri)
     .then(function (grant) {
       self.storeGrant(grant, request, response);
       return grant;

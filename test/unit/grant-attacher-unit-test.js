@@ -19,13 +19,16 @@ const test = require('tape');
 const grantAttacherMiddleware = require('../../middleware/grant-attacher');
 const { SessionExpiredError } = require('../../middleware/auth-utils/errors');
 
-function buildRequest () {
+function buildRequest ({ xhr = false, acceptsHtml = true, originalUrl } = {}) {
   return {
     hostname: 'app.example',
     protocol: 'https',
     headers: { host: 'app.example' },
     query: {},
-    kauth: {}
+    kauth: {},
+    xhr,
+    originalUrl,
+    accepts: (type) => acceptsHtml && type === 'text/html'
   };
 }
 
@@ -178,6 +181,50 @@ test('grant-attacher: SessionExpiredError on XHR request also triggers back-chan
   middleware(req, res, () => {
     t.equal(logoutCalls.length, 1, 'back-channel logout called for XHR requests too');
     t.equal(res._redirects.length, 0, 'no redirect for XHR request');
+    t.end();
+  });
+});
+
+test('grant-attacher: SessionExpiredError redirect preserves the original deep-linked URL', t => {
+  const err = buildSessionExpiredError({ idTokenHint: undefined });
+  const { keycloak } = buildKeycloakStub({ getGrantResult: Promise.reject(err) });
+  const middleware = grantAttacherMiddleware(keycloak);
+  const req = buildRequest({ originalUrl: '/app/84c012a33?locale=fr&start=0' });
+  const res = buildResponse();
+
+  middleware(req, res, () => { t.fail('next() should not be called'); });
+
+  setTimeout(() => {
+    t.ok(
+      res._redirects[0].includes(encodeURIComponent('https://app.example/app/84c012a33?locale=fr&start=0')),
+      'post_logout_redirect_uri should be the originally-requested deep link, not the site root'
+    );
+    t.end();
+  }, 10);
+});
+
+test('grant-attacher: SessionExpiredError on XHR request calls next() without redirecting', t => {
+  const err = buildSessionExpiredError({ idTokenHint: 'id.token.hint' });
+  const { keycloak } = buildKeycloakStub({ getGrantResult: Promise.reject(err) });
+  const middleware = grantAttacherMiddleware(keycloak);
+  const req = buildRequest({ xhr: true });
+  const res = buildResponse();
+
+  middleware(req, res, () => {
+    t.equal(res._redirects.length, 0, 'no redirect for XHR request');
+    t.end();
+  });
+});
+
+test('grant-attacher: SessionExpiredError on API request (no text/html) calls next() without redirecting', t => {
+  const err = buildSessionExpiredError({ idTokenHint: 'id.token.hint' });
+  const { keycloak } = buildKeycloakStub({ getGrantResult: Promise.reject(err) });
+  const middleware = grantAttacherMiddleware(keycloak);
+  const req = buildRequest({ acceptsHtml: false });
+  const res = buildResponse();
+
+  middleware(req, res, () => {
+    t.equal(res._redirects.length, 0, 'no redirect for non-HTML request');
     t.end();
   });
 });

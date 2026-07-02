@@ -17,6 +17,20 @@
 
 const { SessionExpiredError } = require('./auth-utils/errors');
 
+// Reconstruct the URL the browser was navigating to when the session expired,
+// so that after RP-initiated logout the user lands back where they started
+// (and the subsequent login redirect, if any, takes them to the same deep link)
+// instead of always being sent to the site root.
+function currentRequestUrl (request) {
+  const host = request.hostname;
+  const headerHost = request.headers.host.split(':');
+  const port = headerHost[1] || '';
+  const protocol = request.protocol;
+  const path = request.originalUrl || request.url || '/';
+
+  return protocol + '://' + host + (port === '' ? '' : ':' + port) + path;
+}
+
 module.exports = function (keycloak) {
   return function grantAttacher (request, response, next) {
     keycloak.getGrant(request, response)

@@ -15,14 +15,14 @@
  */
 'use strict';
 
-function logoutAndRedirect (keycloak, request, response) {
+function logoutAndRedirect (keycloak, request, response, redirectUrl) {
   let host = request.hostname;
   let headerHost = request.headers.host.split(':');
   let port = headerHost[1] || '';
-  let redirectUrl = request.query.redirectUrl || request.protocol + '://' + host + (port === '' ? '' : ':' + port) + '/';
+  let resolvedRedirectUrl = redirectUrl || request.query.redirectUrl || request.protocol + '://' + host + (port === '' ? '' : ':' + port) + '/';
 
   const idTokenHint = request.kauth.grant && request.kauth.grant.id_token && request.kauth.grant.id_token.token;
-  let keycloakLogoutUrl = keycloak.logoutUrl(redirectUrl, idTokenHint);
+  let keycloakLogoutUrl = keycloak.logoutUrl(resolvedRedirectUrl, idTokenHint);
 
   if (request.kauth.grant) {
     keycloak.deauthenticated(request);
