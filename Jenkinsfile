@@ -5,7 +5,7 @@ def gitCommit
 def shortCommit
 
 node {
-    def nodeJsHome = tool 'NodeJS16'
+    def nodeJsHome = tool 'NodeJS22'
     env.PATH = "${nodeJsHome}/bin:/usr/local/bin:${env.PATH}"
 
     stage('Checkout') {
