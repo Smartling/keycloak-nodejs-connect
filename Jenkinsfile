@@ -4,8 +4,11 @@ def gitBranch
 def gitCommit
 def shortCommit
 
+def frontendDockerImage = "docker-registry-v2.smartling.net/smartling-build-fe:node-22"
+
+
 node {
-    def nodeJsHome = tool 'NodeJS22'
+    def nodeJsHome = tool 'NodeJS16'
     env.PATH = "${nodeJsHome}/bin:/usr/local/bin:${env.PATH}"
 
     stage('Checkout') {
@@ -15,10 +18,18 @@ node {
         shortCommit = gitCommit.take(6)
     }
     stage('Dependencies') {
-        sh "npm install"
+        def image = docker.image(frontendDockerImage)
+        image.pull()
+
+        def dockerOptions = "-v ${env.WORKSPACE}:/app -v node_22_modules_cache:/tmp/cache/node"
+        image.inside(dockerOptions) {
+            sh "npm install"
+        }
     }
     stage('Lint') {
-        sh "npm run lint"
+        image.inside(dockerOptions) {
+            sh "npm run lint"
+        }
     }
     if (gitBranch == "master") {
         stage('Publish') {
