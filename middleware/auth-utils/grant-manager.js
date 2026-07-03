@@ -288,9 +288,9 @@ GrantManager.prototype.createGrant = function createGrant (rawData) {
   if (this.isGrantRefreshable(grant)) {
     return new Promise((resolve, reject) => {
       this.ensureFreshness(grant)
-      .then(g => this.validateGrant(g))
-      .then(g => resolve(g))
-      .catch(err => reject(err));
+        .then(g => this.validateGrant(g))
+        .then(g => resolve(g))
+        .catch(err => reject(err));
     });
   } else {
     return this.validateGrant(grant);
@@ -426,8 +426,8 @@ const createHandler = (manager) => (resolve, reject, json) => {
 
 const refreshHandler = (manager, grant) => (resolve, reject, json) => {
   manager.createGrant(json)
-  .then((grant) => resolve(grant))
-  .catch((err) => reject(err));
+    .then((grant) => resolve(grant))
+    .catch((err) => reject(err));
 };
 
 const validationHandler = (manager, token) => (resolve, reject, json) => {

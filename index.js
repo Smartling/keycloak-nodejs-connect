@@ -255,18 +255,18 @@ Keycloak.prototype.getGrant = function (request, response) {
   if (grantData && !grantData.error) {
     var self = this;
     return this.grantManager.createGrant(JSON.stringify(grantData))
-    .then(grant => {
-      self.storeGrant(grant, request, response);
-      return grant;
-    })
-    .catch((e) => {
-      if (e instanceof SessionExpiredError && e.grant && self.stores.length >= 2) {
-        self.stores[1].wrap(e.grant);
-        return Promise.reject(e);
-      }
-      if (e instanceof Error) return Promise.reject(e);
-      return Promise.reject(new Error('Failed to process grant: ' + e));
-    });
+      .then(grant => {
+        self.storeGrant(grant, request, response);
+        return grant;
+      })
+      .catch((e) => {
+        if (e instanceof SessionExpiredError && e.grant && self.stores.length >= 2) {
+          self.stores[1].wrap(e.grant);
+          return Promise.reject(e);
+        }
+        if (e instanceof Error) return Promise.reject(e);
+        return Promise.reject(new Error('Failed to process grant: ' + e));
+      });
   }
 
   return Promise.reject();

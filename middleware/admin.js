@@ -87,14 +87,14 @@ module.exports = function (keycloak, adminUrl) {
 
   return function adminRequest (request, response, next) {
     switch (request.url) {
-      case urlLogout:
-        adminLogout(request, response, keycloak);
-        break;
-      case urlNotBefore:
-        adminNotBefore(request, response, keycloak);
-        break;
-      default:
-        return next();
+    case urlLogout:
+      adminLogout(request, response, keycloak);
+      break;
+    case urlNotBefore:
+      adminNotBefore(request, response, keycloak);
+      break;
+    default:
+      return next();
     }
   };
 };

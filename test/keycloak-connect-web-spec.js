@@ -28,9 +28,9 @@ const app = new NodeApp();
 test('setup', t => {
   return realmManager.then(() => {
     return admin.createClient(app.publicClient())
-    .then((installation) => {
-      return app.build(installation);
-    });
+      .then((installation) => {
+        return app.build(installation);
+      });
   });
 });
 
@@ -120,10 +120,10 @@ test('Public client should be forbidden for invalid public key', t => {
       }).then(() => {
         app.destroy();
       })
-      .catch(err => {
-        app.destroy();
-        throw err;
-      });
+        .catch(err => {
+          app.destroy();
+          throw err;
+        });
     });
   });
 });
@@ -147,10 +147,10 @@ test('Confidential client should be forbidden for invalid public key', t => {
       }).then(() => {
         app.destroy();
       })
-      .catch(err => {
-        app.destroy();
-        throw err;
-      });
+        .catch(err => {
+          app.destroy();
+          throw err;
+        });
     });
   });
 });

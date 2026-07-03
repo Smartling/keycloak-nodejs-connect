@@ -33,7 +33,7 @@ function waitForElement (locator, t) {
   return driver.wait(until.elementLocated(locator), timeout);
 }
 
-/* eslint-disable no-unused-vars */
+ 
 function waitForVisibleElement (locator, t) {
   var timeout = t || 3000;
   var element = driver.wait(until.elementLocated(locator), timeout);
