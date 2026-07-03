@@ -135,12 +135,12 @@ function NodeApp () {
 
     app.get('/service/grant', keycloak.protect(), (req, res) => {
       keycloak.getGrant(req, res)
-      .then(grant => {
-        res.json(grant);
-      })
-      .catch(err => {
-        throw err;
-      });
+        .then(grant => {
+          res.json(grant);
+        })
+        .catch(err => {
+          throw err;
+        });
     });
 
     app.post('/service/grant', bodyParser.json(), (req, res) => {
@@ -148,13 +148,13 @@ function NodeApp () {
         res.status(400).send('Username and password required');
       }
       keycloak.obtainDirectly(req.body.username, req.body.password)
-      .then(grant => {
-        keycloak.storeGrant(grant, req, res);
-        res.json(grant);
-      })
-      .catch(err => {
-        throw err;
-      });
+        .then(grant => {
+          keycloak.storeGrant(grant, req, res);
+          res.json(grant);
+        })
+        .catch(err => {
+          throw err;
+        });
     });
 
     app.use('*', function (req, res) {
