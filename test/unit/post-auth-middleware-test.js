@@ -163,6 +163,101 @@ test('post-auth: strips session_state and iss, not just code/state/auth_callback
   t.end();
 });
 
+test('post-auth: strips error, error_description and error_uri from the reconstructed redirect_uri', t => {
+  const { keycloak, calls } = buildKeycloakStub();
+  const middleware = postAuthMiddleware(keycloak);
+  const req = buildCallbackRequest({
+    originalUrl: '/app/dashboard?auth_callback=1&state=abc&code=xyz&session_state=sess&error=temporarily_unavailable&error_description=authentication_expired&error_uri=https%3A%2F%2Fkc.example%2Ferror',
+    query: {
+      auth_callback: '1',
+      state: 'abc',
+      code: 'xyz',
+      session_state: 'sess',
+      error: 'temporarily_unavailable',
+      error_description: 'authentication_expired',
+      error_uri: 'https://kc.example/error'
+    }
+  });
+  const res = buildResponse();
+
+  middleware(req, res, () => t.fail('next() should not be called'));
+
+  t.equal(
+    calls.getGrantFromCode[0].redirectUri,
+    'https://app.example/app/dashboard?auth_callback=1',
+    'stale error params are stripped from the reconstructed redirect_uri, matching what forceLogin sent'
+  );
+  t.end();
+});
+
+test('post-auth: attempts the code exchange when a stale error is present alongside a valid code', t => {
+  const { keycloak, calls } = buildKeycloakStub();
+  const middleware = postAuthMiddleware(keycloak);
+  const req = buildCallbackRequest({
+    query: {
+      auth_callback: '1',
+      state: 'abc',
+      code: 'xyz',
+      session_state: 'sess',
+      error: 'temporarily_unavailable',
+      error_description: 'authentication_expired'
+    }
+  });
+  const res = buildResponse();
+
+  middleware(req, res, () => t.fail('next() should not be called'));
+
+  t.equal(calls.getGrantFromCode.length, 1, 'getGrantFromCode should run despite the stale error param');
+  t.equal(calls.accessDenied, 0, 'accessDenied should not be invoked when a valid code is present');
+  t.end();
+});
+
+test('post-auth: still denies access on error when no code is present', t => {
+  const { keycloak, calls } = buildKeycloakStub();
+  const middleware = postAuthMiddleware(keycloak);
+  const req = buildCallbackRequest({
+    query: { auth_callback: '1', error: 'access_denied' }
+  });
+  const res = buildResponse();
+
+  middleware(req, res, () => t.fail('next() should not be called'));
+
+  t.equal(calls.accessDenied, 1, 'accessDenied should be invoked');
+  t.equal(calls.getGrantFromCode.length, 0, 'getGrantFromCode should not run without a code');
+  t.end();
+});
+
+test('post-auth: strips error, error_description and error_uri from the browser-facing redirect after a successful exchange', async t => {
+  const { keycloak } = buildKeycloakStub();
+  const middleware = postAuthMiddleware(keycloak);
+  const req = buildCallbackRequest({
+    path: '/app/account-jobs/',
+    query: {
+      filter: 'CURRENT_WORK',
+      auth_callback: '1',
+      state: 's1',
+      code: 'c1',
+      session_state: 'ss1',
+      iss: 'https://kc.example',
+      error: 'temporarily_unavailable',
+      error_description: 'authentication_expired'
+    }
+  });
+  const res = buildResponse();
+
+  middleware(req, res, () => t.fail('next() should not be called'));
+
+  await new Promise(resolve => setImmediate(resolve));
+
+  t.equal(res._redirects.length, 1, 'one redirect issued');
+  t.equal(
+    res._redirects[0],
+    '/app/account-jobs/?filter=CURRENT_WORK',
+    'stale error params are stripped from the URL shown to the browser after a successful exchange'
+  );
+  t.end();
+});
+
 test('post-auth: includes port from the host header in the reconstructed redirect_uri', t => {
   const { keycloak, calls } = buildKeycloakStub();
   const middleware = postAuthMiddleware(keycloak);

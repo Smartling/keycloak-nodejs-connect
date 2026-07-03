@@ -109,6 +109,24 @@ test('protect: leaves already-percent-encoded sequences untouched', t => {
   t.end();
 });
 
+test('protect: strips stale error, error_description and error_uri params before building redirect_uri', t => {
+  const { keycloak, calls } = buildKeycloakStub();
+  const middleware = protectMiddleware(keycloak);
+  const req = buildRequest({
+    originalUrl: '/app/dashboard?filter=CURRENT_WORK&error=temporarily_unavailable&error_description=authentication_expired&error_uri=https%3A%2F%2Fkc.example%2Ferror'
+  });
+  const res = buildResponse();
+
+  middleware(req, res, () => t.fail('next() should not be called'));
+
+  t.equal(
+    calls.loginUrl[0].redirectUrl,
+    'https://app.example/app/dashboard?filter=CURRENT_WORK&auth_callback=1',
+    'stale error params are stripped, leaving unrelated app params intact'
+  );
+  t.end();
+});
+
 test('protect: does not alter the pathname', t => {
   const { keycloak, calls } = buildKeycloakStub();
   const middleware = protectMiddleware(keycloak);

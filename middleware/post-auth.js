@@ -22,7 +22,7 @@ const URL = require('url');
 // be stripped when reconstructing it for the code-to-token exchange. Also used
 // by `forceLogin` in protect.js to strip stale copies of these params from the
 // current URL before it's captured as the redirect_uri for a fresh login.
-const KEYCLOAK_CALLBACK_PARAMS = ['code', 'state', 'session_state', 'iss'];
+const KEYCLOAK_CALLBACK_PARAMS = ['code', 'state', 'session_state', 'iss', 'error', 'error_description', 'error_uri'];
 
 // Reconstruct the redirect_uri from the incoming callback URL rather than
 // reading it from a single shared session key. The browser landed on this URL
@@ -59,7 +59,7 @@ module.exports = function (keycloak) {
       return next();
     }
 
-    if (request.query.error) {
+    if (request.query.error && !request.query.code) {
       return keycloak.accessDenied(request, response, next);
     }
 
@@ -72,11 +72,8 @@ module.exports = function (keycloak) {
           query: request.query
         };
 
-        delete urlParts.query.code;
         delete urlParts.query.auth_callback;
-        delete urlParts.query.state;
-        delete urlParts.query.session_state;
-        delete urlParts.query.iss;
+        KEYCLOAK_CALLBACK_PARAMS.forEach(param => delete urlParts.query[param]);
 
         let cleanUrl = URL.format(urlParts);
 
