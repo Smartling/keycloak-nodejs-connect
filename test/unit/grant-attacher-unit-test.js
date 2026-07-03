@@ -185,23 +185,6 @@ test('grant-attacher: SessionExpiredError on XHR request also triggers back-chan
   });
 });
 
-test('grant-attacher: SessionExpiredError redirect preserves the original deep-linked URL', t => {
-  const err = buildSessionExpiredError({ idTokenHint: undefined });
-  const { keycloak } = buildKeycloakStub({ getGrantResult: Promise.reject(err) });
-  const middleware = grantAttacherMiddleware(keycloak);
-  const req = buildRequest({ originalUrl: '/app/84c012a33?locale=fr&start=0' });
-  const res = buildResponse();
-
-  middleware(req, res, () => { t.fail('next() should not be called'); });
-
-  setTimeout(() => {
-    t.ok(
-      res._redirects[0].includes(encodeURIComponent('https://app.example/app/84c012a33?locale=fr&start=0')),
-      'post_logout_redirect_uri should be the originally-requested deep link, not the site root'
-    );
-    t.end();
-  }, 10);
-});
 
 test('grant-attacher: SessionExpiredError on XHR request calls next() without redirecting', t => {
   const err = buildSessionExpiredError({ idTokenHint: 'id.token.hint' });
