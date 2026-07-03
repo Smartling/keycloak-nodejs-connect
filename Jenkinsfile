@@ -5,6 +5,10 @@ def gitCommit
 def shortCommit
 
 def frontendDockerImage = "docker-registry-v2.smartling.net/smartling-build-fe:node-22"
+def image = docker.image(frontendDockerImage)
+image.pull()
+
+def dockerOptions = "-v ${env.WORKSPACE}:/app -v node_22_modules_cache:/tmp/cache/node"
 
 
 node {
@@ -18,10 +22,6 @@ node {
         shortCommit = gitCommit.take(6)
     }
     stage('Dependencies') {
-        def image = docker.image(frontendDockerImage)
-        image.pull()
-
-        def dockerOptions = "-v ${env.WORKSPACE}:/app -v node_22_modules_cache:/tmp/cache/node"
         image.inside(dockerOptions) {
             sh "npm install"
         }
