@@ -405,6 +405,210 @@ test('deduplication map is empty after all concurrent refreshes settle', t => {
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
+// ─── Cross-instance refresh coordination ────────────────────────────────────
+//
+// _pendingRefreshes only dedupes within a single process. When multiple app
+// instances share one Keycloak session (e.g. two browser tabs routed to
+// different instances by the load balancer), a configured `refreshCoordinator`
+// lets one instance's in-flight refresh be shared with the others instead of
+// each independently racing Keycloak.
+
+// Fake shared coordinator simulating a Redis-backed claim/publish/await store.
+function makeFakeCoordinator () {
+  const locks = new Map();
+  const results = new Map();
+  return {
+    claim (key) {
+      if (locks.has(key)) return Promise.resolve(false);
+      locks.set(key, true);
+      return Promise.resolve(true);
+    },
+    publish (key, value) {
+      results.set(key, value);
+      locks.delete(key);
+      return Promise.resolve();
+    },
+    await (key, timeoutMs) {
+      const start = Date.now();
+      const poll = (resolve) => {
+        if (results.has(key)) return resolve(results.get(key));
+        if (Date.now() - start >= timeoutMs) return resolve(null);
+        setTimeout(() => poll(resolve), 5);
+      };
+      return new Promise(poll);
+    }
+  };
+}
+
+// A coordinator whose claim always succeeds (nothing else ever holds the lock)
+// but whose await() always times out - simulates a leader that claimed the
+// lock and then crashed before publishing a result.
+function makeStuckCoordinator () {
+  return {
+    claim () { return Promise.resolve(true); },
+    publish () { return Promise.resolve(); },
+    await (key, timeoutMs) {
+      return new Promise(resolve => setTimeout(() => resolve(null), Math.min(timeoutMs, 20)));
+    }
+  };
+}
+
+function makeManagerWithCoordinator (tokenMinTtl, coordinator) {
+  return new GrantManager({
+    realmUrl: KC_HOST + '/auth/realms/test',
+    clientId: 'test-client',
+    public: true,
+    tokenMinTtl: tokenMinTtl,
+    minTimeBetweenJwksRequests: 0,
+    refreshCoordinator: coordinator
+  });
+}
+
+test('two separate GrantManager instances sharing a coordinator dedupe a concurrent refresh to one Keycloak call', t => {
+  nock.cleanAll();
+  const coordinator = makeFakeCoordinator();
+  const grant = makeRefreshNeededGrant('jti-cross-instance');
+
+  const mgr1 = makeManagerWithCoordinator(0, coordinator);
+  const mgr2 = makeManagerWithCoordinator(0, coordinator);
+  mgr1.createGrant = () => Promise.resolve(grant);
+  mgr2.createGrant = () => Promise.resolve(grant);
+
+  // Exactly one interceptor - if both instances independently call Keycloak, this fails.
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
+
+  const p1 = mgr1.ensureFreshness(grant);
+  const p2 = mgr2.ensureFreshness(grant);
+
+  Promise.all([p1, p2])
+    .then(() => { t.pass('both instances resolved via a single Keycloak call'); t.end(); })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
+test('follower instance receives the leader\'s error via the coordinator instead of calling Keycloak itself', t => {
+  nock.cleanAll();
+  const coordinator = makeFakeCoordinator();
+  const grant = makeRefreshNeededGrant('jti-cross-instance-err');
+
+  const mgr1 = makeManagerWithCoordinator(0, coordinator);
+  const mgr2 = makeManagerWithCoordinator(0, coordinator);
+  mgr1.createGrant = () => Promise.resolve(grant);
+  mgr2.createGrant = () => Promise.resolve(grant);
+
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(401, 'Unauthorized');
+
+  const p1 = mgr1.ensureFreshness(grant);
+  const p2 = mgr2.ensureFreshness(grant);
+
+  Promise.all([p1.catch(e => e), p2.catch(e => e)])
+    .then(([e1, e2]) => {
+      t.ok(e1 instanceof Error, 'leader rejected with an Error');
+      t.ok(e2 instanceof Error, 'follower rejected with an Error');
+      t.ok(e2.message.includes('401'), 'follower error carries the leader\'s failure details');
+      t.equal(nock.pendingMocks().length, 0, 'exactly one KC call made across both instances');
+      t.end();
+    });
+});
+
+test('follower falls back to its own Keycloak call when the coordinator never publishes a result (leader crashed)', t => {
+  nock.cleanAll();
+  const coordinator = makeStuckCoordinator();
+  const grant = makeRefreshNeededGrant('jti-cross-instance-timeout');
+
+  const mgr2 = makeManagerWithCoordinator(0, coordinator);
+  mgr2.createGrant = () => Promise.resolve(grant);
+
+  // No leader ever actually calls Keycloak in this test scenario - only the
+  // follower's self-heal fetch (after the coordinator wait times out) should fire.
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
+
+  mgr2.ensureFreshness(grant)
+    .then(() => {
+      t.equal(nock.pendingMocks().length, 0, 'follower made its own Keycloak call after coordinator wait timed out');
+      t.end();
+    })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
+test('without a configured coordinator, two separate GrantManager instances do not dedupe (existing per-process-only behavior)', t => {
+  nock.cleanAll();
+  const grant = makeRefreshNeededGrant('jti-no-coordinator');
+
+  const mgr1 = makeManager(0);
+  const mgr2 = makeManager(0);
+  mgr1.createGrant = () => Promise.resolve(grant);
+  mgr2.createGrant = () => Promise.resolve(grant);
+
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new1', refresh_token: 'new-rt1' }));
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new2', refresh_token: 'new-rt2' }));
+
+  Promise.all([mgr1.ensureFreshness(grant), mgr2.ensureFreshness(grant)])
+    .then(() => { t.pass('each instance independently called Keycloak (no cross-instance coordination configured)'); t.end(); })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
+// ─── Cross-instance code-exchange coordination ──────────────────────────────
+//
+// Same coordinator primitive applied to obtainFromCode, keyed by the
+// authorization code, so a duplicate/racing callback request (e.g. the
+// original "Code already used for userSession" scenario) shares one Keycloak
+// exchange across instances instead of each independently redeeming the code.
+
+test('two separate GrantManager instances sharing a coordinator dedupe a concurrent code exchange to one Keycloak call', t => {
+  nock.cleanAll();
+  const coordinator = makeFakeCoordinator();
+  const grant = { access_token: {}, refresh_token: undefined };
+
+  const mgr1 = makeManagerWithCoordinator(0, coordinator);
+  const mgr2 = makeManagerWithCoordinator(0, coordinator);
+  mgr1.createGrant = () => Promise.resolve(grant);
+  mgr2.createGrant = () => Promise.resolve(grant);
+
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
+
+  const fakeRequest = { session: { id: 'sess-1' } };
+
+  const p1 = mgr1.obtainFromCode(fakeRequest, 'dup-code', 'sess-1', undefined, 'http://app/callback');
+  const p2 = mgr2.obtainFromCode(fakeRequest, 'dup-code', 'sess-1', undefined, 'http://app/callback');
+
+  Promise.all([p1, p2])
+    .then(() => { t.pass('both instances resolved via a single Keycloak code-exchange call'); t.end(); })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
+test('follower receives the leader\'s error for a duplicate code exchange instead of redeeming it again', t => {
+  nock.cleanAll();
+  const coordinator = makeFakeCoordinator();
+  const grant = { access_token: {}, refresh_token: undefined };
+
+  const mgr1 = makeManagerWithCoordinator(0, coordinator);
+  const mgr2 = makeManagerWithCoordinator(0, coordinator);
+  mgr1.createGrant = () => Promise.resolve(grant);
+  mgr2.createGrant = () => Promise.resolve(grant);
+
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(400, 'Code already used for userSession');
+
+  const fakeRequest = { session: { id: 'sess-1' } };
+
+  const p1 = mgr1.obtainFromCode(fakeRequest, 'dup-code-2', 'sess-1', undefined, 'http://app/callback');
+  const p2 = mgr2.obtainFromCode(fakeRequest, 'dup-code-2', 'sess-1', undefined, 'http://app/callback');
+
+  Promise.all([p1.catch(e => e), p2.catch(e => e)])
+    .then(([e1, e2]) => {
+      t.ok(e1 instanceof Error, 'leader rejected with an Error');
+      t.ok(e2 instanceof Error, 'follower rejected with an Error');
+      t.equal(nock.pendingMocks().length, 0, 'exactly one KC call made across both instances - code redeemed only once');
+      t.end();
+    });
+});
+
 // ─── Integration: session-cap guard fires inside createGrant (storm path) ────
 //
 // When KC26 returns a new token with a shorter-than-configured lifetime (exp-iat < tokenMinTtl),

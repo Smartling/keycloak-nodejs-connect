@@ -42,8 +42,16 @@ function GrantManager (config) {
   this.notBefore = 0;
   this.rotation = new Rotation(config);
   this.tokenMinTtl = config.tokenMinTtl;
+  this.refreshCoordinator = config.refreshCoordinator;
   this._pendingRefreshes = new Map();
 }
+
+// Coordination TTLs for `refreshCoordinator`-backed cross-instance dedup (see `_coordinated`).
+// A real HTTP round-trip to Keycloak normally completes in well under a second; these are
+// safety-net bounds for a claim-holder that crashes before publishing a result.
+const COORDINATION_LOCK_TTL_MS = 5000;
+const COORDINATION_RESULT_TTL_MS = 15000;
+const COORDINATION_WAIT_TIMEOUT_MS = 5000;
 
 /**
  * Use the direct grant API to obtain a grant from Keycloak.
@@ -102,10 +110,14 @@ GrantManager.prototype.obtainFromCode = function obtainFromCode (request, code, 
     client_id: this.clientId,
     redirect_uri: redirectUri || (request.session ? request.session.auth_redirect_uri : {})
   };
-  const handler = createHandler(this);
   const options = postOptions(this);
+  const doFetch = () => fetch(this, rawJsonHandler, options, params);
 
-  return nodeify(fetch(this, handler, options, params), callback);
+  const promise = this.refreshCoordinator
+    ? this._coordinated('kc-code:' + code, doFetch).then(json => this.createGrant(json))
+    : doFetch().then(json => this.createGrant(json));
+
+  return nodeify(promise, callback);
 };
 
 /**
@@ -174,7 +186,6 @@ GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callba
     grant_type: 'refresh_token',
     refresh_token: grant.refresh_token.token
   };
-  const handler = refreshHandler(this, grant);
   const options = postOptions(this);
 
   const refreshJti = grant.refresh_token.content?.jti;
@@ -182,7 +193,11 @@ GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callba
     return nodeify(this._pendingRefreshes.get(refreshJti), callback);
   }
 
-  const refreshPromise = fetch(this, handler, options, params);
+  const doFetch = () => fetch(this, rawJsonHandler, options, params);
+  const refreshPromise = (refreshJti && this.refreshCoordinator)
+    ? this._coordinated('kc-refresh:' + refreshJti, doFetch).then(json => this.createGrant(json))
+    : doFetch().then(json => this.createGrant(json));
+
   if (refreshJti) {
     this._pendingRefreshes.set(refreshJti, refreshPromise);
     refreshPromise.then(
@@ -192,6 +207,39 @@ GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callba
   }
 
   return nodeify(refreshPromise, callback);
+};
+
+/**
+ * Coordinate a Keycloak-session-touching operation (refresh or code exchange) across
+ * multiple app instances via the configured `refreshCoordinator`, so only one instance
+ * performs the actual request while others share its result instead of independently
+ * racing Keycloak for the same code/refresh-token. Falls back to calling `doFetch`
+ * directly if the coordinator never publishes a result (e.g. the instance that won
+ * the claim crashed before finishing).
+ *
+ * @param {String} key Coordination key, unique to the code/refresh-token being exchanged.
+ * @param {Function} doFetch () => Promise<String> resolving the raw Keycloak response body.
+ * @return {Promise<String>} the raw Keycloak response body (from this or another instance).
+ */
+GrantManager.prototype._coordinated = function _coordinated (key, doFetch) {
+  const coordinator = this.refreshCoordinator;
+
+  return coordinator.claim(key, COORDINATION_LOCK_TTL_MS).then(claimed => {
+    if (claimed) {
+      return doFetch().then(
+        json => coordinator.publish(key, { ok: true, json: json }, COORDINATION_RESULT_TTL_MS)
+          .catch(() => {}).then(() => json),
+        err => coordinator.publish(key, { ok: false, message: err.message }, COORDINATION_RESULT_TTL_MS)
+          .catch(() => {}).then(() => Promise.reject(err))
+      );
+    }
+
+    return coordinator.await(key, COORDINATION_WAIT_TIMEOUT_MS).then(result => {
+      if (!result) return doFetch();
+      if (result.ok) return result.json;
+      return Promise.reject(new Error(result.message));
+    });
+  });
 };
 
 /**
@@ -424,11 +472,7 @@ const createHandler = (manager) => (resolve, reject, json) => {
   }
 };
 
-const refreshHandler = (manager, grant) => (resolve, reject, json) => {
-  manager.createGrant(json)
-    .then((grant) => resolve(grant))
-    .catch((err) => reject(err));
-};
+const rawJsonHandler = (resolve, reject, json) => resolve(json);
 
 const validationHandler = (manager, token) => (resolve, reject, json) => {
   const data = JSON.parse(json);
