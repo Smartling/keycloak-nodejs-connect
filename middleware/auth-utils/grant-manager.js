@@ -238,8 +238,8 @@ GrantManager.prototype._coordinated = function _coordinated (key, doFetch) {
       if (!result) return doFetch();
       if (result.ok) return result.json;
       return Promise.reject(new Error(result.message));
-    });
-  });
+    }, () => doFetch());
+  }, () => doFetch());
 };
 
 /**

@@ -458,6 +458,28 @@ function makeStuckCoordinator () {
   };
 }
 
+// A coordinator whose claim() always rejects (e.g. Redis unreachable) - simulates
+// the coordinator itself being down before any claim attempt succeeds or fails
+// cleanly. _coordinated should fall back to doFetch() rather than fail the caller.
+function makeCoordinatorWithFailingClaim () {
+  return {
+    claim () { return Promise.reject(new Error('redis unavailable')); },
+    publish () { return Promise.resolve(); },
+    await () { return Promise.reject(new Error('redis unavailable')); }
+  };
+}
+
+// A coordinator whose claim() always resolves null (never the leader) but whose
+// await() rejects (e.g. Redis becomes unreachable partway through the wait).
+// _coordinated should fall back to doFetch() rather than fail the caller.
+function makeCoordinatorWithFailingAwait () {
+  return {
+    claim () { return Promise.resolve(null); },
+    publish () { return Promise.resolve(); },
+    await () { return Promise.reject(new Error('redis unavailable')); }
+  };
+}
+
 function makeManagerWithCoordinator (tokenMinTtl, coordinator) {
   return new GrantManager({
     realmUrl: KC_HOST + '/auth/realms/test',
@@ -533,6 +555,44 @@ test('follower falls back to its own Keycloak call when the coordinator never pu
   mgr2.ensureFreshness(grant)
     .then(() => {
       t.equal(nock.pendingMocks().length, 0, 'follower made its own Keycloak call after coordinator wait timed out');
+      t.end();
+    })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
+test('falls back to its own Keycloak call when the coordinator\'s claim() rejects (coordinator unavailable)', t => {
+  nock.cleanAll();
+  const coordinator = makeCoordinatorWithFailingClaim();
+  const grant = makeRefreshNeededGrant('jti-coordinator-claim-down');
+
+  const mgr = makeManagerWithCoordinator(0, coordinator);
+  mgr.createGrant = () => Promise.resolve(grant);
+
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
+
+  mgr.ensureFreshness(grant)
+    .then(() => {
+      t.equal(nock.pendingMocks().length, 0, 'made its own Keycloak call despite claim() rejecting');
+      t.end();
+    })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
+test('falls back to its own Keycloak call when the coordinator\'s await() rejects (coordinator unavailable)', t => {
+  nock.cleanAll();
+  const coordinator = makeCoordinatorWithFailingAwait();
+  const grant = makeRefreshNeededGrant('jti-coordinator-await-down');
+
+  const mgr = makeManagerWithCoordinator(0, coordinator);
+  mgr.createGrant = () => Promise.resolve(grant);
+
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
+
+  mgr.ensureFreshness(grant)
+    .then(() => {
+      t.equal(nock.pendingMocks().length, 0, 'made its own Keycloak call despite await() rejecting');
       t.end();
     })
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
