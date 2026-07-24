@@ -224,12 +224,12 @@ GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callba
 GrantManager.prototype._coordinated = function _coordinated (key, doFetch) {
   const coordinator = this.refreshCoordinator;
 
-  return coordinator.claim(key, COORDINATION_LOCK_TTL_MS).then(claimed => {
-    if (claimed) {
+  return coordinator.claim(key, COORDINATION_LOCK_TTL_MS).then(token => {
+    if (token) {
       return doFetch().then(
-        json => coordinator.publish(key, { ok: true, json: json }, COORDINATION_RESULT_TTL_MS)
+        json => coordinator.publish(key, { ok: true, json: json }, COORDINATION_RESULT_TTL_MS, token)
           .catch(() => {}).then(() => json),
-        err => coordinator.publish(key, { ok: false, message: err.message }, COORDINATION_RESULT_TTL_MS)
+        err => coordinator.publish(key, { ok: false, message: err.message }, COORDINATION_RESULT_TTL_MS, token)
           .catch(() => {}).then(() => Promise.reject(err))
       );
     }

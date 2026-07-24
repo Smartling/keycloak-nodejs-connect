@@ -413,17 +413,22 @@ test('deduplication map is empty after all concurrent refreshes settle', t => {
 // lets one instance's in-flight refresh be shared with the others instead of
 // each independently racing Keycloak.
 
-// Fake shared coordinator simulating a Redis-backed claim/publish/await store.
+// Fake shared coordinator simulating a Redis-backed claim/publish/await store. Tracks the
+// per-key ownership token so a wiring bug (e.g. _coordinated forgetting to pass the token
+// through to publish()) shows up as a dropped publish instead of passing silently.
 function makeFakeCoordinator () {
-  const locks = new Map();
+  const locks = new Map(); // key -> token
   const results = new Map();
+  let tokenCounter = 0;
   return {
     claim (key) {
-      if (locks.has(key)) return Promise.resolve(false);
-      locks.set(key, true);
-      return Promise.resolve(true);
+      if (locks.has(key)) return Promise.resolve(null);
+      const token = 'token-' + (++tokenCounter);
+      locks.set(key, token);
+      return Promise.resolve(token);
     },
-    publish (key, value) {
+    publish (key, value, ttlMs, token) {
+      if (locks.get(key) !== token) return Promise.resolve();
       results.set(key, value);
       locks.delete(key);
       return Promise.resolve();
@@ -445,7 +450,7 @@ function makeFakeCoordinator () {
 // lock and then crashed before publishing a result.
 function makeStuckCoordinator () {
   return {
-    claim () { return Promise.resolve(true); },
+    claim () { return Promise.resolve('token-stuck'); },
     publish () { return Promise.resolve(); },
     await (key, timeoutMs) {
       return new Promise(resolve => setTimeout(() => resolve(null), Math.min(timeoutMs, 20)));
