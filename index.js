@@ -44,6 +44,16 @@ const { SessionExpiredError } = require('./middleware/auth-utils/errors');
  * In all cases, also, authentication through a Bearer authentication
  * header is supported for non-interactive APIs.
  *
+ * The `config` hash may also include `refreshCoordinator`, an object with
+ * `claim(key, ttlMs)` (resolves to a per-claim ownership token, or `null` if
+ * already claimed), `publish(key, value, ttlMs, token)` (writes `value` only if
+ * `token` still matches the current claim) and `await(key, timeoutMs)` methods,
+ * backed by a store shared across all app instances (e.g. Redis). When
+ * provided, concurrent code exchanges or token refreshes for the same session -
+ * from multiple app instances, not just multiple requests on one process - are
+ * coalesced into a single Keycloak call instead of each instance racing Keycloak
+ * independently. Optional; without it, deduplication remains per-process only.
+ *
  * The `keycloakConfig` object, by default, is populated by the contents of
  * a `keycloak.json` file installed alongside your application, copied from
  * the Keycloak administration console when you provision your application.
@@ -59,6 +69,7 @@ const { SessionExpiredError } = require('./middleware/auth-utils/errors');
 function Keycloak (config, keycloakConfig) {
   // If keycloakConfig is null, Config() will search for `keycloak.json`.
   this.config = new Config(keycloakConfig);
+  this.config.refreshCoordinator = config && config.refreshCoordinator;
 
   this.grantManager = new GrantManager(this.config);
 
