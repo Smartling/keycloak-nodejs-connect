@@ -52,6 +52,7 @@ function GrantManager (config) {
 const COORDINATION_LOCK_TTL_MS = 5000;
 const COORDINATION_RESULT_TTL_MS = 15000;
 const COORDINATION_WAIT_TIMEOUT_MS = 5000;
+const COORDINATION_RECURSION_LIMIT = 3;
 
 /**
  * Use the direct grant API to obtain a grant from Keycloak.
@@ -223,23 +224,33 @@ GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callba
  */
 GrantManager.prototype._coordinated = function _coordinated (key, doFetch) {
   const coordinator = this.refreshCoordinator;
+  let claimRetries = COORDINATION_RECURSION_LIMIT;
 
-  return coordinator.claim(key, COORDINATION_LOCK_TTL_MS).then(token => {
-    if (token) {
-      return doFetch().then(
-        json => coordinator.publish(key, { ok: true, json: json }, COORDINATION_RESULT_TTL_MS, token)
-          .catch(() => {}).then(() => json),
-        err => coordinator.publish(key, { ok: false, message: err.message }, COORDINATION_RESULT_TTL_MS, token)
-          .catch(() => {}).then(() => Promise.reject(err))
-      );
-    }
+  const execute = () => {
+    return coordinator.claim(key, COORDINATION_LOCK_TTL_MS).then(token => {
+      if (token) {
+        return doFetch().then(
+          json => coordinator.publish(key, { ok: true, json: json }, COORDINATION_RESULT_TTL_MS, token)
+            .catch(() => {}).then(() => json),
+          err => coordinator.publish(key, { ok: false, message: err.message }, COORDINATION_RESULT_TTL_MS, token)
+            .catch(() => {}).then(() => Promise.reject(err))
+        );
+      }
 
-    return coordinator.await(key, COORDINATION_WAIT_TIMEOUT_MS).then(result => {
-      if (!result) return doFetch();
-      if (result.ok) return result.json;
-      return Promise.reject(new Error(result.message));
+      return coordinator.await(key, COORDINATION_WAIT_TIMEOUT_MS).then(result => {
+        if (!result) {
+          claimRetries = claimRetries - 1;
+          if (claimRetries > 0) {
+            return execute();
+          }
+          return doFetch();
+        };
+        if (result.ok) return result.json;
+        return Promise.reject(new Error(result.message));
+      }, () => doFetch());
     }, () => doFetch());
-  }, () => doFetch());
+  }
+  return execute();
 };
 
 /**

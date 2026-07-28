@@ -560,6 +560,82 @@ test('follower falls back to its own Keycloak call when the coordinator never pu
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
+// A coordinator that models real Redis TTL expiry: an entry (lock sentinel or published
+// result) simply disappears once its expiresAt passes, exactly like a Redis key with PX.
+// Used to reproduce the race from https://github.com/Smartling/smartling-express/pull/59
+// #discussion_r3664941181: if two followers both see await()=null when a leader's lock
+// expires mid-wait, and _coordinated just fell back to doFetch() directly instead of
+// re-claiming first, both followers would independently hit Keycloak.
+function makeExpiringLockCoordinator () {
+  const store = new Map(); // key -> { value, expiresAt }
+  const read = (key) => {
+    const entry = store.get(key);
+    if (!entry) return undefined;
+    if (Date.now() >= entry.expiresAt) {
+      store.delete(key);
+      return undefined;
+    }
+    return entry;
+  };
+  return {
+    claim (key, ttlMs) {
+      if (read(key)) return Promise.resolve(null);
+      const token = 'token-' + Math.random().toString(36).slice(2);
+      store.set(key, { value: 'sentinel:' + token, expiresAt: Date.now() + ttlMs });
+      return Promise.resolve(token);
+    },
+    publish (key, value, ttlMs, token) {
+      const entry = read(key);
+      if (!entry || entry.value !== 'sentinel:' + token) return Promise.resolve();
+      store.set(key, { value: JSON.stringify(value), expiresAt: Date.now() + ttlMs });
+      return Promise.resolve();
+    },
+    await (key, timeoutMs) {
+      const start = Date.now();
+      const poll = (resolve) => {
+        const entry = read(key);
+        if (!entry) return resolve(null);
+        if (!entry.value.startsWith('sentinel:')) return resolve(JSON.parse(entry.value));
+        if (Date.now() - start >= timeoutMs) return resolve(null);
+        setTimeout(() => poll(resolve), 5);
+      };
+      return new Promise(poll);
+    }
+  };
+}
+
+test('two followers re-claim instead of both independently calling Keycloak when the leader\'s lock expires mid-wait', t => {
+  nock.cleanAll();
+  const coordinator = makeExpiringLockCoordinator();
+  const grant = makeRefreshNeededGrant('jti-reclaim-race');
+  const key = 'kc-refresh:jti-reclaim-race';
+
+  // A third, already-in-flight leader that's about to disappear (crashed/slow) - a
+  // short-lived sentinel unrelated to either follower's own claim attempt below.
+  coordinator.claim(key, 30);
+
+  const mgr1 = makeManagerWithCoordinator(0, coordinator);
+  const mgr2 = makeManagerWithCoordinator(0, coordinator);
+  mgr1.createGrant = () => Promise.resolve(grant);
+  mgr2.createGrant = () => Promise.resolve(grant);
+
+  // Exactly one interceptor - if both followers see await()=null and immediately fall back
+  // to doFetch() without re-claiming (the pre-fix behavior), the second real call has no
+  // matching interceptor left and that follower's promise rejects.
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
+
+  const p1 = mgr1.ensureFreshness(grant);
+  const p2 = mgr2.ensureFreshness(grant);
+
+  Promise.all([p1, p2])
+    .then(() => {
+      t.equal(nock.pendingMocks().length, 0, 'exactly one Keycloak call across both followers');
+      t.end();
+    })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
 test('falls back to its own Keycloak call when the coordinator\'s claim() rejects (coordinator unavailable)', t => {
   nock.cleanAll();
   const coordinator = makeCoordinatorWithFailingClaim();
