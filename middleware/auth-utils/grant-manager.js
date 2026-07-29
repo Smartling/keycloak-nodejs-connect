@@ -52,7 +52,18 @@ function GrantManager (config) {
 const COORDINATION_LOCK_TTL_MS = 5000;
 const COORDINATION_RESULT_TTL_MS = 15000;
 const COORDINATION_WAIT_TIMEOUT_MS = 5000;
-const COORDINATION_RECURSION_LIMIT = 3;
+// The leader renews its claim this often while doFetch is in flight (see
+// _leadWithHeartbeat), so a live leader's claim never lapses mid-operation - only a
+// leader that's stopped renewing (crashed, or finished) ever lets it expire.
+const HEARTBEAT_INTERVAL_MS = Math.floor(COORDINATION_LOCK_TTL_MS / 3);
+// Purely a defensive cap against pathological Redis flakiness (e.g. claim() never
+// succeeding). With heartbeating, a lapsed claim unambiguously means the leader is gone,
+// so re-running the claim/await cycle needs no "how many times do we guess" budget - this
+// just stops a follower from recursing forever if the coordinator itself is unusable.
+const COORDINATION_RECLAIM_DEPTH_LIMIT = 5;
+const COORDINATION_RECLAIM_JITTER_MAX_MS = 25;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Use the direct grant API to obtain a grant from Keycloak.
@@ -214,43 +225,76 @@ GrantManager.prototype.ensureFreshness = function ensureFreshness (grant, callba
  * Coordinate a Keycloak-session-touching operation (refresh or code exchange) across
  * multiple app instances via the configured `refreshCoordinator`, so only one instance
  * performs the actual request while others share its result instead of independently
- * racing Keycloak for the same code/refresh-token. Falls back to calling `doFetch`
- * directly if the coordinator never publishes a result (e.g. the instance that won
- * the claim crashed before finishing).
+ * racing Keycloak for the same code/refresh-token.
+ *
+ * The winner of `claim()` leads: it performs `doFetch` while renewing its claim on a
+ * heartbeat (see `_leadWithHeartbeat`), so the claim can't lapse while it's genuinely
+ * still working. Losers `await()` the leader's published result. If a claim does lapse
+ * (the leader crashed or finished without publishing), `await()` resolves with `null` and
+ * this re-runs the whole claim/await cycle - Redis's atomic claim still arbitrates a
+ * single new leader among any followers re-claiming at once - bounded by
+ * `COORDINATION_RECLAIM_DEPTH_LIMIT` purely as a defensive cap against pathological
+ * coordinator flakiness, not because a lapsed claim is ambiguous. Falls back to calling
+ * `doFetch` directly whenever the coordinator itself is unusable (`claim`/`await`
+ * rejecting) or once that depth limit is exhausted.
  *
  * @param {String} key Coordination key, unique to the code/refresh-token being exchanged.
  * @param {Function} doFetch () => Promise<String> resolving the raw Keycloak response body.
+ * @param {Number} [depth] Internal recursion counter - callers should omit this.
  * @return {Promise<String>} the raw Keycloak response body (from this or another instance).
  */
-GrantManager.prototype._coordinated = function _coordinated (key, doFetch) {
+GrantManager.prototype._coordinated = function _coordinated (key, doFetch, depth) {
+  depth = depth || 0;
   const coordinator = this.refreshCoordinator;
-  let claimRetries = COORDINATION_RECURSION_LIMIT;
 
-  const execute = () => {
-    return coordinator.claim(key, COORDINATION_LOCK_TTL_MS).then(token => {
-      if (token) {
-        return doFetch().then(
-          json => coordinator.publish(key, { ok: true, json: json }, COORDINATION_RESULT_TTL_MS, token)
-            .catch(() => {}).then(() => json),
-          err => coordinator.publish(key, { ok: false, message: err.message }, COORDINATION_RESULT_TTL_MS, token)
-            .catch(() => {}).then(() => Promise.reject(err))
-        );
+  return coordinator.claim(key, COORDINATION_LOCK_TTL_MS).then(token => {
+    if (token) {
+      return this._leadWithHeartbeat(coordinator, key, token, doFetch);
+    }
+
+    return coordinator.await(key, COORDINATION_WAIT_TIMEOUT_MS).then(result => {
+      if (result === null) {
+        if (depth >= COORDINATION_RECLAIM_DEPTH_LIMIT) return doFetch();
+        return sleep(Math.random() * COORDINATION_RECLAIM_JITTER_MAX_MS)
+          .then(() => this._coordinated(key, doFetch, depth + 1));
       }
-
-      return coordinator.await(key, COORDINATION_WAIT_TIMEOUT_MS).then(result => {
-        if (!result) {
-          claimRetries = claimRetries - 1;
-          if (claimRetries > 0) {
-            return execute();
-          }
-          return doFetch();
-        };
-        if (result.ok) return result.json;
-        return Promise.reject(new Error(result.message));
-      }, () => doFetch());
+      if (result.ok) return result.json;
+      return Promise.reject(new Error(result.message));
     }, () => doFetch());
-  }
-  return execute();
+  }, () => doFetch());
+};
+
+/**
+ * Performs `doFetch` as the leader of `key`'s claim, renewing it on a timer
+ * (`HEARTBEAT_INTERVAL_MS`) for as long as `doFetch` is pending, then publishes the
+ * outcome for any followers awaiting it. The heartbeat always stops before this settles -
+ * on success, on failure, or the moment a renewal reports the claim was preempted.
+ *
+ * @param {Object} coordinator The configured `refreshCoordinator`.
+ * @param {String} key Coordination key.
+ * @param {String} token Ownership token from the `claim()` that made us leader.
+ * @param {Function} doFetch () => Promise<String> resolving the raw Keycloak response body.
+ * @return {Promise<String>} the raw Keycloak response body.
+ */
+GrantManager.prototype._leadWithHeartbeat = function _leadWithHeartbeat (coordinator, key, token, doFetch) {
+  const interval = setInterval(() => {
+    coordinator.renew(key, token, COORDINATION_LOCK_TTL_MS).then(stillOwner => {
+      if (!stillOwner) clearInterval(interval);
+    }, () => { /* transient renew failure just costs one skipped beat, not the lease */ });
+  }, HEARTBEAT_INTERVAL_MS);
+
+  return doFetch().then(
+    json => {
+      clearInterval(interval);
+      return coordinator.publish(key, { ok: true, json: json }, COORDINATION_RESULT_TTL_MS, token)
+        .catch(() => {}).then(() => json);
+    },
+    err => {
+      clearInterval(interval);
+      return coordinator.publish(key, { ok: false, message: err.message }, COORDINATION_RESULT_TTL_MS, token)
+        .catch(() => {}).then(() => Promise.reject(err));
+    }
+  );
 };
 
 /**

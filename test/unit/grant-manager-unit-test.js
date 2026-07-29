@@ -427,6 +427,9 @@ function makeFakeCoordinator () {
       locks.set(key, token);
       return Promise.resolve(token);
     },
+    renew (key, token) {
+      return Promise.resolve(locks.get(key) === token);
+    },
     publish (key, value, ttlMs, token) {
       if (locks.get(key) !== token) return Promise.resolve();
       results.set(key, value);
@@ -451,6 +454,7 @@ function makeFakeCoordinator () {
 function makeStuckCoordinator () {
   return {
     claim () { return Promise.resolve('token-stuck'); },
+    renew () { return Promise.resolve(true); },
     publish () { return Promise.resolve(); },
     await (key, timeoutMs) {
       return new Promise(resolve => setTimeout(() => resolve(null), Math.min(timeoutMs, 20)));
@@ -464,6 +468,7 @@ function makeStuckCoordinator () {
 function makeCoordinatorWithFailingClaim () {
   return {
     claim () { return Promise.reject(new Error('redis unavailable')); },
+    renew () { return Promise.resolve(true); },
     publish () { return Promise.resolve(); },
     await () { return Promise.reject(new Error('redis unavailable')); }
   };
@@ -475,6 +480,7 @@ function makeCoordinatorWithFailingClaim () {
 function makeCoordinatorWithFailingAwait () {
   return {
     claim () { return Promise.resolve(null); },
+    renew () { return Promise.resolve(true); },
     publish () { return Promise.resolve(); },
     await () { return Promise.reject(new Error('redis unavailable')); }
   };
@@ -490,6 +496,158 @@ function makeManagerWithCoordinator (tokenMinTtl, coordinator) {
     refreshCoordinator: coordinator
   });
 }
+
+// ─── Heartbeat-based lease renewal (_leadWithHeartbeat) ─────────────────────
+//
+// A claim's TTL alone can't tell "the leader crashed" apart from "the leader is just
+// slow" - so instead of guessing via bounded retries, the leader actively renews its own
+// claim on a timer while its operation is in flight. The claim can then only lapse once
+// the leader has genuinely stopped renewing (crashed, or finished). Tested here without
+// real timers or real HTTP: global.setInterval/clearInterval are monkey-patched so ticks
+// can be driven manually, and doFetch is a manually-resolvable Promise.
+
+// Monkey-patches the global interval timers for the duration of a test so heartbeat ticks
+// can be driven deterministically instead of waiting on HEARTBEAT_INTERVAL_MS of real time.
+function withFakeInterval () {
+  const realSetInterval = global.setInterval;
+  const realClearInterval = global.clearInterval;
+  const registered = new Map();
+  let nextId = 1;
+  global.setInterval = (cb) => {
+    const id = nextId++;
+    registered.set(id, cb);
+    return id;
+  };
+  global.clearInterval = (id) => { registered.delete(id); };
+  return {
+    tick () { Array.from(registered.values()).forEach(cb => cb()); },
+    activeCount () { return registered.size; },
+    restore () {
+      global.setInterval = realSetInterval;
+      global.clearInterval = realClearInterval;
+    }
+  };
+}
+
+test('_leadWithHeartbeat renews the claim on each tick while doFetch is pending, then stops once it resolves', t => {
+  const fakeTimer = withFakeInterval();
+  const renewCalls = [];
+  const coordinator = {
+    renew (key, token, ttlMs) {
+      renewCalls.push({ key: key, token: token, ttlMs: ttlMs });
+      return Promise.resolve(true);
+    },
+    publish () { return Promise.resolve(); }
+  };
+  const mgr = makeManagerWithCoordinator(0, coordinator);
+
+  let resolveFetch;
+  const doFetch = () => new Promise(resolve => { resolveFetch = resolve; });
+
+  const resultPromise = mgr._leadWithHeartbeat(coordinator, 'some-key', 'tok-1', doFetch);
+
+  fakeTimer.tick();
+  fakeTimer.tick();
+
+  Promise.resolve().then(() => {
+    t.equal(renewCalls.length, 2, 'renew called once per heartbeat tick while doFetch is pending');
+    t.equal(renewCalls[0].key, 'some-key', 'renew is called with the coordination key');
+    t.equal(renewCalls[0].token, 'tok-1', 'renew is called with the claim token');
+
+    resolveFetch('the-json-result');
+
+    return resultPromise.then(result => {
+      t.equal(result, 'the-json-result', 'resolves with doFetch\'s own result');
+
+      fakeTimer.tick();
+      t.equal(renewCalls.length, 2, 'no further renew calls after doFetch settles (interval cleared)');
+
+      fakeTimer.restore();
+      t.end();
+    });
+  }).catch(err => { fakeTimer.restore(); t.fail('unexpected: ' + err.message); t.end(); });
+});
+
+test('_leadWithHeartbeat stops renewing and clears the timer once doFetch rejects', t => {
+  const fakeTimer = withFakeInterval();
+  let renewCallCount = 0;
+  const coordinator = {
+    renew () { renewCallCount++; return Promise.resolve(true); },
+    publish () { return Promise.resolve(); }
+  };
+  const mgr = makeManagerWithCoordinator(0, coordinator);
+
+  let rejectFetch;
+  const doFetch = () => new Promise((resolve, reject) => { rejectFetch = reject; });
+
+  const resultPromise = mgr._leadWithHeartbeat(coordinator, 'k', 'tok', doFetch);
+  fakeTimer.tick();
+
+  Promise.resolve().then(() => {
+    t.equal(renewCallCount, 1, 'renewed once while pending');
+    rejectFetch(new Error('kc down'));
+
+    return resultPromise.then(
+      () => { t.fail('should have rejected'); t.end(); },
+      err => {
+        t.equal(err.message, 'kc down', 'propagates doFetch\'s rejection');
+        fakeTimer.tick();
+        t.equal(renewCallCount, 1, 'no further renew calls after doFetch rejects (interval cleared)');
+        fakeTimer.restore();
+        t.end();
+      }
+    );
+  }).catch(err => { fakeTimer.restore(); t.fail('unexpected: ' + err.message); t.end(); });
+});
+
+test('_leadWithHeartbeat stops renewing once preempted (renew resolves false)', t => {
+  const fakeTimer = withFakeInterval();
+  let renewCallCount = 0;
+  const coordinator = {
+    renew () { renewCallCount++; return Promise.resolve(false); },
+    publish () { return Promise.resolve(); }
+  };
+  const mgr = makeManagerWithCoordinator(0, coordinator);
+
+  let resolveFetch;
+  const doFetch = () => new Promise(resolve => { resolveFetch = resolve; });
+
+  const resultPromise = mgr._leadWithHeartbeat(coordinator, 'k', 'tok', doFetch);
+  fakeTimer.tick();
+
+  Promise.resolve().then(() => {
+    t.equal(fakeTimer.activeCount(), 0, 'interval cleared after being told the claim is no longer held');
+
+    fakeTimer.tick();
+    t.equal(renewCallCount, 1, 'renew not called again once preemption is detected');
+
+    resolveFetch('done anyway');
+    return resultPromise.then(() => { fakeTimer.restore(); t.end(); });
+  }).catch(err => { fakeTimer.restore(); t.fail('unexpected: ' + err.message); t.end(); });
+});
+
+test('_leadWithHeartbeat treats a rejected renew() as a skipped beat, not a lost lease', t => {
+  const fakeTimer = withFakeInterval();
+  let renewCallCount = 0;
+  const coordinator = {
+    renew () { renewCallCount++; return Promise.reject(new Error('transient redis blip')); },
+    publish () { return Promise.resolve(); }
+  };
+  const mgr = makeManagerWithCoordinator(0, coordinator);
+
+  let resolveFetch;
+  const doFetch = () => new Promise(resolve => { resolveFetch = resolve; });
+
+  const resultPromise = mgr._leadWithHeartbeat(coordinator, 'k', 'tok', doFetch);
+  fakeTimer.tick();
+
+  Promise.resolve().then(() => {
+    t.equal(renewCallCount, 1, 'renew() was actually called and its rejection observed');
+    t.equal(fakeTimer.activeCount(), 1, 'interval still active after a transient renew failure');
+    resolveFetch('ok');
+    return resultPromise.then(() => { fakeTimer.restore(); t.end(); });
+  }).catch(err => { fakeTimer.restore(); t.fail('unexpected: ' + err.message); t.end(); });
+});
 
 test('two separate GrantManager instances sharing a coordinator dedupe a concurrent refresh to one Keycloak call', t => {
   nock.cleanAll();
@@ -584,6 +742,12 @@ function makeExpiringLockCoordinator () {
       store.set(key, { value: 'sentinel:' + token, expiresAt: Date.now() + ttlMs });
       return Promise.resolve(token);
     },
+    renew (key, token, ttlMs) {
+      const entry = read(key);
+      if (!entry || entry.value !== 'sentinel:' + token) return Promise.resolve(false);
+      store.set(key, { value: entry.value, expiresAt: Date.now() + ttlMs });
+      return Promise.resolve(true);
+    },
     publish (key, value, ttlMs, token) {
       const entry = read(key);
       if (!entry || entry.value !== 'sentinel:' + token) return Promise.resolve();
@@ -633,6 +797,30 @@ test('two followers re-claim instead of both independently calling Keycloak when
       t.equal(nock.pendingMocks().length, 0, 'exactly one Keycloak call across both followers');
       t.end();
     })
+    .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
+});
+
+// With heartbeating in place, a claim lapsing always means the leader genuinely stopped
+// renewing - so a follower re-running the whole claim/await cycle needs only a small,
+// purely defensive depth cap against pathological Redis flakiness (e.g. claim() itself
+// never succeeding), not a "how many times do we guess before giving up" budget.
+test('gives up re-claiming after the depth limit and self-heals via a direct Keycloak call', t => {
+  nock.cleanAll();
+  const coordinator = {
+    claim () { return Promise.resolve(null); }, // never wins the claim
+    renew () { return Promise.resolve(true); },
+    publish () { return Promise.resolve(); },
+    await () { return Promise.resolve(null); } // the lock always looks like it just vanished
+  };
+  const grant = makeRefreshNeededGrant('jti-depth-cap');
+  const mgr = makeManagerWithCoordinator(0, coordinator);
+  mgr.createGrant = () => Promise.resolve(grant);
+
+  nock(KC_HOST).post(KC_TOKEN_PATH).once()
+    .reply(200, JSON.stringify({ access_token: 'new', refresh_token: 'new-rt' }));
+
+  mgr.ensureFreshness(grant)
+    .then(() => { t.pass('gave up re-claiming and self-healed via a direct Keycloak call'); t.end(); })
     .catch(err => { t.fail('unexpected rejection: ' + err.message); t.end(); });
 });
 
