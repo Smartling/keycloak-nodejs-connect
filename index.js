@@ -46,9 +46,13 @@ const { SessionExpiredError } = require('./middleware/auth-utils/errors');
  *
  * The `config` hash may also include `refreshCoordinator`, an object with
  * `claim(key, ttlMs)` (resolves to a per-claim ownership token, or `null` if
- * already claimed), `publish(key, value, ttlMs, token)` (writes `value` only if
+ * already claimed), `renew(key, token, ttlMs)` (extends the claim's TTL, but only
+ * if `token` still matches - returns `false` once the claim has been taken over
+ * by someone else), `publish(key, value, ttlMs, token)` (writes `value` only if
  * `token` still matches the current claim) and `await(key, timeoutMs)` methods,
- * backed by a store shared across all app instances (e.g. Redis). When
+ * backed by a store shared across all app instances (e.g. Redis). The claim
+ * holder calls `renew` on a heartbeat while it works, so the claim can only
+ * lapse once it has genuinely stopped renewing (crashed, or finished). When
  * provided, concurrent code exchanges or token refreshes for the same session -
  * from multiple app instances, not just multiple requests on one process - are
  * coalesced into a single Keycloak call instead of each instance racing Keycloak
