@@ -1,2 +1,8 @@
 node_modules
 .idea
+
+# Playwright repro harness (test/playwright-repro/README.md) - local dev/QA
+# tooling only, not part of the published package. Also guards against a
+# real .env with stg credentials ever being included in a publish.
+test/playwright-repro
+.env
