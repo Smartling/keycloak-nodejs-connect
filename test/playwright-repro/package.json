@@ -1,0 +1,20 @@
+{
+  "name": "keycloak-connect-playwright-repro",
+  "private": true,
+  "description": "Playwright harness to reproduce the intermittent KC26 'Too Many Redirects' loop (AUT-1462) against stg. Not part of the published @smartling/keycloak-connect package.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "provision:plan": "node provision.js",
+    "provision:apply": "node provision.js --apply",
+    "teardown:plan": "node provision.js --teardown",
+    "teardown:apply": "node provision.js --teardown --apply",
+    "repro": "node repro.js"
+  },
+  "dependencies": {
+    "@keycloak/keycloak-admin-client": "20.0.5",
+    "dotenv": "^16.4.5",
+    "playwright": "^1.47.0"
+  }
+}

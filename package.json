@@ -22,6 +22,7 @@
     "middleware",
     "stores",
     "test",
+    "!test/playwright-repro",
     "index.js",
     "uuid.js"
   ],
