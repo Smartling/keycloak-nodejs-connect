@@ -12,9 +12,6 @@ def dockerOptions = "-v ${env.WORKSPACE}:/app -v node_22_modules_cache:/tmp/cach
 
 
 node {
-    def nodeJsHome = tool 'NodeJS22'
-    env.PATH = "${nodeJsHome}/bin:/usr/local/bin:${env.PATH}"
-
     stage('Checkout') {
         checkout scm
         gitBranch = sh(returnStdout: true, script: 'git rev-parse --abbrev-ref HEAD').trim()
@@ -34,8 +31,10 @@ node {
     if (gitBranch == "master") {
         stage('Publish') {
             sshagent (credentials: ['bb0927b6-318c-4e4a-a3d8-ac89152185df']) {
-                sh "npm config list"
-                sh "npm publish --loglevel silly"
+                image.inside("${dockerOptions} -v ${env.HOME}/.npmrc:/tmp/.npmrc:ro -e NPM_CONFIG_USERCONFIG=/tmp/.npmrc") {
+                    sh "npm config list"
+                    sh "npm publish --loglevel silly"
+                }
             }
         }
     }
