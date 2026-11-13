@@ -51,7 +51,7 @@
     "nock": "^9.0.2",
     "phantomjs-prebuilt": "^2.1.14",
     "roi": "^0.15.0",
-    "rsa-compat": "^1.2.7",
+    "rsa-compat": "^2.0.8",
     "selenium-webdriver": "^2.52.0",
     "server-destroy": "^1.0.1",
     "tape": "^4.6.3",
